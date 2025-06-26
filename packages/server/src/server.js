@@ -790,7 +790,8 @@ const httpServer = createHttpServer(app);
 // Create TW2GEM Server instance with HTTP server
 const server = new Tw2GemServer({
     serverOptions: {
-        server: httpServer
+        server: httpServer,
+        path: "/twilio"
     },
     geminiOptions: {
         server: {
@@ -889,7 +890,7 @@ app.post('/webhook/voice', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const connect = twiml.connect();
     connect.stream({
-        url: WEBSOCKET_URL
+        url: `${WEBSOCKET_URL}/twilio`
     });
     
     // Send the response immediately
@@ -1020,7 +1021,7 @@ app.post('/webhook/ivr-selection', async (req, res) => {
         // Connect bidirectional stream for conversation
         const connect = twiml.connect();
         connect.stream({
-            url: WEBSOCKET_URL
+            url: `${WEBSOCKET_URL}/twilio`
         });
         
         res.type('text/xml');
@@ -1080,7 +1081,7 @@ app.post('/webhook/ivr-fallback', async (req, res) => {
         // Connect bidirectional stream for conversation
         const connect = twiml.connect();
         connect.stream({
-            url: WEBSOCKET_URL
+            url: `${WEBSOCKET_URL}/twilio`
         });
         
         res.type('text/xml');
@@ -1324,7 +1325,7 @@ app.get('/test/twilio', async (req, res) => {
                 account_sid: account.sid,
                 account_status: account.status,
                 webhook_url: `${WEBHOOK_URL}/webhook/voice`,
-                stream_url: WEBSOCKET_URL
+                stream_url: `${WEBSOCKET_URL}/twilio`
             }
         });
     } catch (error) {
@@ -1410,7 +1411,7 @@ app.get('/test/system', async (req, res) => {
                 status: 'pass',
                 account_status: account.status,
                 webhook_url: `${WEBHOOK_URL}/webhook/voice`,
-                stream_url: WEBSOCKET_URL
+                stream_url: `${WEBSOCKET_URL}/twilio`
             };
         } else {
             results.tests.twilio = {
@@ -1464,7 +1465,7 @@ app.get('/test/system', async (req, res) => {
         results.tests.websocket = {
             status: 'pass',
             port: PORT,
-            url: `${WEBSOCKET_URL}:${PORT}`,
+            url: `${WEBSOCKET_URL}/twilio`,
             message: 'Ready for Twilio streams'
         };
     } catch (error) {
