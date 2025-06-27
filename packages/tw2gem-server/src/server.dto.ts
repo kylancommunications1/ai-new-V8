@@ -1,11 +1,9 @@
-import { GeminiLiveClientOptions } from '@tw2gem/gemini-live-client';
-import { GeminiLiveClient } from './gemini-live-client';
 import { TwilioWebSocket } from '@tw2gem/twilio-server';
 import { ServerOptions } from 'ws';
 
 export class Tw2GemSocket extends TwilioWebSocket {
     twilioStreamSid?: string;
-    geminiClient?: GeminiLiveClient;
+    geminiClient?: any; // Using any type since we're now using the official client
     
     // Call tracking properties
     callId?: string;
@@ -23,7 +21,7 @@ export class Tw2GemSocket extends TwilioWebSocket {
 
 export class Tw2GemServerOptions {
     serverOptions!: ServerOptions;
-    geminiOptions!: GeminiLiveClientOptions;
+    geminiOptions!: any; // Using any type since we're now using the official client
     supabaseUrl?: string;
     supabaseKey?: string;
 }

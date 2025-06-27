@@ -2,6 +2,7 @@ import { TwilioWebSocketServer } from '../../twilio-server/dist/index.js';
 import { GeminiLiveOfficial } from './gemini-live-official.js';
 // Import from dist instead of src
 import { FunctionCallHandler } from '../../tw2gem-server/dist/function-handler.js';
+import { Modality } from '@google/genai';
 import express from 'express';
 import cors from 'cors';
 import { createServer as createHttpServer } from 'http';
@@ -221,22 +222,72 @@ class Tw2GemServer extends TwilioWebSocketServer {
     
     async setupGeminiClient(socket) {
         try {
-            // Create official Gemini Live client configuration
+            // Create official Gemini Live client configuration with callbacks
             const officialConfig = {
                 apiKey: this.geminiOptions.server.apiKey,
                 model: this.geminiOptions.setup.model,
                 speechConfig: this.geminiOptions.setup.generationConfig.speechConfig,
                 systemInstruction: this.geminiOptions.setup.systemInstruction,
-                realtimeInputConfig: this.geminiOptions.setup.realtimeInputConfig,
-                inputAudioTranscription: this.geminiOptions.setup.inputAudioTranscription,
-                outputAudioTranscription: this.geminiOptions.setup.outputAudioTranscription
+                
+                // Set up callbacks directly in the constructor
+                onServerContent: (serverContent) => {
+                    console.log('🤖 Received from Gemini:', JSON.stringify(serverContent, null, 2).substring(0, 200) + '...');
+                    this.handleGeminiResponse(socket, serverContent);
+                },
+                
+                onReady: () => {
+                    console.log('🤖 Gemini Live client connected and ready');
+                    
+                    // Send initial greeting to start the conversation
+                    try {
+                        socket.geminiLive.sendText('Hello! Thank you for calling. How can I help you today?');
+                        console.log('🔄 Sent initial greeting to start conversation');
+                    } catch (error) {
+                        console.error('❌ Error sending initial greeting:', error);
+                    }
+                },
+                
+                onError: (error) => {
+                    console.error('❌ Gemini Live client error:', error);
+                    
+                    // If we have a Twilio client and streamSid, send an error message to the caller
+                    if (socket.twilioStreamSid) {
+                        try {
+                            // Import twilio client
+                            const twilioClient = require('twilio')(
+                                process.env.TWILIO_ACCOUNT_SID,
+                                process.env.TWILIO_AUTH_TOKEN
+                            );
+                            
+                            // Try to send a message to the caller
+                            try {
+                                if (socket.geminiLive) {
+                                    socket.geminiLive.sendText('I apologize, but I am experiencing technical difficulties. Please try your call again later.');
+                                }
+                            } catch (err) {
+                                console.error('❌ Error sending error message to caller:', err);
+                            }
+                            
+                            // After a short delay, end the call
+                            setTimeout(() => {
+                                twilioClient.calls(socket.callSid)
+                                    .update({status: 'completed'})
+                                    .then(() => console.log('📞 Call ended due to Gemini error'))
+                                    .catch(err => console.error('❌ Error ending call:', err));
+                            }, 5000);
+                        } catch (err) {
+                            console.error('❌ Error handling Gemini error:', err);
+                        }
+                    }
+                },
+                
+                onClose: () => {
+                    console.log('🔌 Gemini Live connection closed for call:', socket.twilioStreamSid);
+                }
             };
 
             // Create a new official Gemini Live client for this socket
             const geminiClient = new GeminiLiveOfficial(officialConfig);
-            
-            // Configure the Gemini client
-            this.configureGeminiClient(socket, geminiClient);
             
             // Connect to the official API
             await geminiClient.connect();
@@ -249,60 +300,6 @@ class Tw2GemServer extends TwilioWebSocketServer {
             console.error('❌ Error creating official Gemini Live client:', error);
             return null;
         }
-    }
-    
-    configureGeminiClient(socket, geminiClient) {
-        // Handle Gemini audio responses
-        geminiClient.onServerContent = (serverContent) => {
-            console.log('🤖 Received from Gemini:', JSON.stringify(serverContent, null, 2));
-            this.handleGeminiResponse(socket, serverContent);
-        };
-        
-        // Handle Gemini connection events
-        geminiClient.onReady = () => {
-            console.log('🤖 Gemini Live client connected and ready');
-            
-            // Send initial greeting to start the conversation
-            // This follows the official guide pattern for initiating conversation
-            try {
-                geminiClient.sendText('Hello! Thank you for calling. How can I help you today?');
-                console.log('🔄 Sent initial greeting to start conversation');
-            } catch (error) {
-                console.error('❌ Error sending initial greeting:', error);
-            }
-        };
-        
-        geminiClient.onError = (error) => {
-            console.error('❌ Gemini Live client error:', error);
-            
-            // If we have a Twilio client and streamSid, send an error message to the caller
-            if (socket.twilioStreamSid) {
-                try {
-                    // Import twilio client
-                    const twilioClient = require('twilio')(
-                        process.env.TWILIO_ACCOUNT_SID,
-                        process.env.TWILIO_AUTH_TOKEN
-                    );
-                    
-                    // Try to send a message to the caller
-                    try {
-                        socket.geminiLive.sendText('I apologize, but I am experiencing technical difficulties. Please try your call again later.');
-                    } catch (err) {
-                        console.error('❌ Error sending error message to caller:', err);
-                    }
-                    
-                    // After a short delay, end the call
-                    setTimeout(() => {
-                        twilioClient.calls(socket.callSid)
-                            .update({status: 'completed'})
-                            .then(() => console.log('📞 Call ended due to Gemini error'))
-                            .catch(err => console.error('❌ Error ending call:', err));
-                    }, 5000);
-                } catch (err) {
-                    console.error('❌ Error handling Gemini error:', err);
-                }
-            }
-        };
     }
     
     setupEventHandlers() {
@@ -579,12 +576,7 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         
                         // Send audio to Gemini Live in the correct format
                         try {
-                            socket.geminiLive.sendRealtimeInput({
-                                audio: {
-                                    mimeType: 'audio/pcm;rate=16000',
-                                    data: audioData
-                                }
-                            });
+                            socket.geminiLive.sendAudio(audioData);
                         } catch (err) {
                             console.error('❌ Error sending audio to Gemini:', err);
                             // Try to recreate the Gemini client
@@ -841,11 +833,11 @@ const server = new Tw2GemServer({
         server: {
             apiKey: process.env.GEMINI_API_KEY,
         },
-        primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
+        primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-live-2.5-flash-preview',
         fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
         setup: {
-            model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
-            responseModalities: ['AUDIO'],
+            model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-live-2.5-flash-preview',
+            responseModalities: [Modality.AUDIO],
             generationConfig: {
                 candidateCount: 1,
                 maxOutputTokens: 8192,
