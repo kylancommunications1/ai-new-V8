@@ -12,16 +12,14 @@ const tw2gemServer = () => {
             },
             setup: {
                 model: 'models/gemini-2.0-flash-live-001',
-                generationConfig: {
-                    responseModalities: ['AUDIO'],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: {
-                                voiceName: 'Puck'
-                            }
-                        },
-                        languageCode: 'es-US'
+                responseModalities: ['AUDIO'],
+                speechConfig: {
+                    voiceConfig: {
+                        prebuiltVoiceConfig: {
+                            voiceName: 'Puck'
+                        }
                     },
+                    languageCode: 'es-US'
                 },
                 systemInstruction: {
                     parts: [{ text: 'Eres un asistente virtual de la tienda online store.com' }]
