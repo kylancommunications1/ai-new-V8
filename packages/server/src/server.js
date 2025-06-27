@@ -1,5 +1,5 @@
 import { TwilioWebSocketServer } from '../../twilio-server/dist/index.js';
-import { GeminiLiveClient } from '../../gemini-live-client/dist/index.js';
+import { GeminiLiveOfficial } from './gemini-live-official.js';
 // Import from dist instead of src
 import { FunctionCallHandler } from '../../tw2gem-server/dist/function-handler.js';
 import express from 'express';
@@ -219,20 +219,34 @@ class Tw2GemServer extends TwilioWebSocketServer {
         console.log('✅ Server cleanup complete');
     }
     
-    setupGeminiClient(socket) {
+    async setupGeminiClient(socket) {
         try {
-            // Create a new Gemini Live client for this socket
-            const geminiClient = new GeminiLiveClient(this.geminiOptions);
+            // Create official Gemini Live client configuration
+            const officialConfig = {
+                apiKey: this.geminiOptions.server.apiKey,
+                model: this.geminiOptions.setup.model,
+                speechConfig: this.geminiOptions.setup.generationConfig.speechConfig,
+                systemInstruction: this.geminiOptions.setup.systemInstruction,
+                realtimeInputConfig: this.geminiOptions.setup.realtimeInputConfig,
+                inputAudioTranscription: this.geminiOptions.setup.inputAudioTranscription,
+                outputAudioTranscription: this.geminiOptions.setup.outputAudioTranscription
+            };
+
+            // Create a new official Gemini Live client for this socket
+            const geminiClient = new GeminiLiveOfficial(officialConfig);
             
             // Configure the Gemini client
             this.configureGeminiClient(socket, geminiClient);
+            
+            // Connect to the official API
+            await geminiClient.connect();
             
             // Store the Gemini client in the socket
             socket.geminiLive = geminiClient;
             
             return geminiClient;
         } catch (error) {
-            console.error('❌ Error creating Gemini Live client:', error);
+            console.error('❌ Error creating official Gemini Live client:', error);
             return null;
         }
     }
@@ -247,7 +261,15 @@ class Tw2GemServer extends TwilioWebSocketServer {
         // Handle Gemini connection events
         geminiClient.onReady = () => {
             console.log('🤖 Gemini Live client connected and ready');
-            // Gemini will automatically greet the caller based on system instructions
+            
+            // Send initial greeting to start the conversation
+            // This follows the official guide pattern for initiating conversation
+            try {
+                geminiClient.sendText('Hello! Thank you for calling. How can I help you today?');
+                console.log('🔄 Sent initial greeting to start conversation');
+            } catch (error) {
+                console.error('❌ Error sending initial greeting:', error);
+            }
         };
         
         geminiClient.onError = (error) => {
@@ -264,10 +286,7 @@ class Tw2GemServer extends TwilioWebSocketServer {
                     
                     // Try to send a message to the caller
                     try {
-                        socket.geminiLive.sendMessage({
-                            type: 'text',
-                            text: 'I apologize, but I am experiencing technical difficulties. Please try your call again later.'
-                        });
+                        socket.geminiLive.sendText('I apologize, but I am experiencing technical difficulties. Please try your call again later.');
                     } catch (err) {
                         console.error('❌ Error sending error message to caller:', err);
                     }
@@ -299,7 +318,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
             });
             
             // Create Gemini Live client for this call
-            this.setupGeminiClient(socket);
+            this.setupGeminiClient(socket).catch(error => {
+                console.error('❌ Failed to setup Gemini client:', error);
+            });
             socket.twilioStreamSid = null;
             
             // Handle Twilio messages
@@ -359,7 +380,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         } catch (err) {
                             // Ignore errors when closing
                         }
-                        this.setupGeminiClient(socket);
+                        this.setupGeminiClient(socket).catch(error => {
+                            console.error('❌ Failed to recreate Gemini client:', error);
+                        });
                     }
                 } catch (err) {
                     console.error('❌ Error recovering from WebSocket error:', err);
@@ -418,6 +441,21 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         console.log('💬 Gemini text response:', part.text);
                     }
                 }
+            }
+
+            // Handle transcriptions according to official guide
+            if (serverContent.inputTranscription) {
+                console.log('🎤 Input transcription:', serverContent.inputTranscription.text);
+            }
+
+            if (serverContent.outputTranscription) {
+                console.log('🔊 Output transcription:', serverContent.outputTranscription.text);
+            }
+
+            // Handle interruptions according to official guide
+            if (serverContent.interrupted) {
+                console.log('⚠️ Generation was interrupted');
+                // If realtime playback is implemented, stop playing audio and clear queued playback here
             }
         } catch (error) {
             console.error('❌ Error handling Gemini response:', error);
@@ -504,7 +542,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
                 // Make sure we have a valid Gemini Live client
                 if (!socket.geminiLive) {
                     console.log('⚠️ Creating new Gemini Live client');
-                    this.setupGeminiClient(socket);
+                    this.setupGeminiClient(socket).catch(error => {
+                        console.error('❌ Failed to create Gemini client:', error);
+                    });
                 }
                 
                 console.log('🤖 Gemini Live client ready for audio');
@@ -520,7 +560,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
                 // Check if we have a Gemini client
                 if (!socket.geminiLive) {
                     console.log('⚠️ No Gemini client for media event, creating one');
-                    this.setupGeminiClient(socket);
+                    this.setupGeminiClient(socket).catch(error => {
+                        console.error('❌ Failed to create Gemini client for media:', error);
+                    });
                 }
                 
                 if (socket.geminiLive && message.media?.payload) {
@@ -546,7 +588,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         } catch (err) {
                             console.error('❌ Error sending audio to Gemini:', err);
                             // Try to recreate the Gemini client
-                            this.setupGeminiClient(socket);
+                            this.setupGeminiClient(socket).catch(error => {
+                                console.error('❌ Failed to recreate Gemini client after error:', error);
+                            });
                         }
                     } catch (error) {
                         console.error('❌ Audio conversion error:', error);
@@ -798,19 +842,30 @@ const server = new Tw2GemServer({
             apiKey: process.env.GEMINI_API_KEY,
         },
         primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
-        fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
+        fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-live-2.5-flash-preview',
         setup: {
             model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
+            responseModalities: ['AUDIO'],
             generationConfig: {
-                responseModalities: ['AUDIO'],
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: {
-                            voiceName: 'Puck' // Default, will be overridden per agent
-                        }
-                    },
-                    languageCode: process.env.LANGUAGE_CODE || 'en-US'
+                candidateCount: 1,
+                maxOutputTokens: 8192,
+                temperature: 0.7,
+                topP: 0.95,
+                topK: 40
+            },
+            speechConfig: {
+                voiceConfig: {
+                    prebuiltVoiceConfig: {
+                        voiceName: 'Puck' // Default, will be overridden per agent
+                    }
                 },
+                languageCode: process.env.LANGUAGE_CODE || 'en-US'
+            },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            enableAffectiveDialog: true,
+            proactivity: {
+                proactiveAudio: true
             },
             systemInstruction: {
                 parts: [{ 
@@ -818,6 +873,16 @@ const server = new Tw2GemServer({
                           'You are a professional AI assistant for customer service calls. IMPORTANT: You MUST speak first immediately when the call connects. Start with a warm greeting like "Hello! Thank you for calling. How can I help you today?" Be helpful, polite, and efficient. Always initiate the conversation and maintain a friendly, professional tone throughout the call.'
                 }]
             },
+            realtimeInputConfig: {
+                automaticActivityDetection: {
+                    startOfSpeechSensitivity: 'START_SENSITIVITY_MEDIUM',
+                    endOfSpeechSensitivity: 'END_SENSITIVITY_MEDIUM',
+                    silenceDurationMs: 1000,
+                    prefixPaddingMs: 500
+                }
+            },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
             tools: []
         }
     }
