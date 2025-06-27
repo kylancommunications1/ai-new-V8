@@ -104,6 +104,10 @@ export class GeminiLiveClient {
         this.send({ realtimeInput: realTimeData });
     }
 
+    public sendAudioStreamEnd() {
+        this.send({ realtimeInput: { audioStreamEnd: true } });
+    }
+
     public sendClientContent(content: { turns: any, turnComplete?: boolean }) {
         this.send({ clientContent: content });
     }

@@ -842,7 +842,7 @@ const server = new Tw2GemServer({
             apiKey: process.env.GEMINI_API_KEY,
         },
         primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
-        fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-live-2.5-flash-preview',
+        fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
         setup: {
             model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.0-flash-live-001',
             responseModalities: ['AUDIO'],

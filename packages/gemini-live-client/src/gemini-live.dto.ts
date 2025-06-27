@@ -45,7 +45,8 @@ export interface GeminiServer {
 
 export interface BidiGenerateContentSetup {
     model: string;
-    generationConfig: {
+    responseModalities: ('TEXT' | 'AUDIO')[];
+    generationConfig?: {
         candidateCount?: number,
         maxOutputTokens?: number,
         temperature?: number,
@@ -54,15 +55,14 @@ export interface BidiGenerateContentSetup {
         presencePenalty?: number,
         frequencyPenalty?: number,
         mediaResolution?: 'MEDIA_RESOLUTION_LOW' | 'MEDIA_RESOLUTION_MEDIUM' | 'MEDIA_RESOLUTION_HIGH'
-        responseModalities: ('TEXT' | 'AUDIO')[],
-        speechConfig?: {
-            voiceConfig?: {
-                prebuiltVoiceConfig?: {
-                    voiceName: string
-                }
-            },
-            languageCode?: string
+    };
+    speechConfig?: {
+        voiceConfig?: {
+            prebuiltVoiceConfig?: {
+                voiceName: string
+            }
         },
+        languageCode?: string
     };
     systemInstruction?: {
         parts: [{ text: string }]
