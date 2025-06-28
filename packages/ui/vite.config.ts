@@ -59,9 +59,9 @@ export default defineConfig(({ mode }) => {
     }
   },
   define: {
-    'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || 'http://localhost:12001'),
-    'process.env.VITE_SUPABASE_URL': JSON.stringify(env.SUPABASE_URL),
-    'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY)
+    'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_BASE_URL || 'http://localhost:12001'),
+    'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || env.SUPABASE_URL),
+    'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY)
   }
   };
 });

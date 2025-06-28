@@ -15,6 +15,7 @@
     "lint:fix": "npm run lint:fix --workspaces",
     "format": "prettier --write .",
     "clean": "npm run clean --workspaces && rm -rf dist",
+    "start-ai-call-center": "node start-ai-call-center.js",
     "health": "curl http://localhost:12001/health",
     "ui:dev": "npm run dev --workspace=packages/ui",
     "ui:build": "npm run build --workspace=packages/ui",
@@ -24,7 +25,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^1.7.0",
     "@supabase/supabase-js": "^2.50.0",
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
