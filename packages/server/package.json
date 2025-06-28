@@ -12,7 +12,7 @@
     "clean": "echo 'No clean step required'"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^1.7.0",
     "@supabase/supabase-js": "^2.50.0",
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
