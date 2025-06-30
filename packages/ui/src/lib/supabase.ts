@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseServiceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('Missing Supabase environment variables - running in demo mode');
@@ -10,6 +11,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(
   supabaseUrl || 'https://demo.supabase.co', 
   supabaseAnonKey || 'demo-key'
+);
+
+// Admin client with service role key for privileged operations
+export const supabaseAdmin = createClient(
+  supabaseUrl || 'https://demo.supabase.co',
+  supabaseServiceKey || 'demo-key'
 );
 
 // Database types
@@ -30,6 +37,7 @@ export interface Profile {
   twilio_account_sid?: string
   twilio_auth_token?: string
   gemini_api_key?: string
+  gemini_model?: 'gemini-live-2.5-flash-preview' | 'gemini-2.0-flash-live-001' | 'gemini-2.5-flash-preview-native-audio-dialog'
   routing_strategy?: string
   call_recording_enabled?: boolean
   transcription_enabled?: boolean
@@ -70,11 +78,12 @@ export interface AIAgent {
 
 export interface IVRMenu {
   id: string
+  profile_id: string
   name: string
   greeting_text: string
-  timeout_message?: string
-  invalid_message?: string
-  max_attempts?: number
+  timeout_seconds: number
+  max_attempts: number
+  is_active: boolean
   created_at: string
   updated_at: string
   ivr_options?: IVROption[]
@@ -85,7 +94,9 @@ export interface IVROption {
   ivr_menu_id: string
   digit: string
   description: string
-  agent_id: string
+  agent_id?: string
+  action_type: string
+  action_data?: Record<string, any>
   created_at: string
   updated_at: string
 }
@@ -94,32 +105,11 @@ export interface PhoneNumber {
   id: string
   profile_id: string
   phone_number: string
-  friendly_name: string
-  agent_id: string | null
+  friendly_name?: string
+  agent_id?: string
   is_primary: boolean
   is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface IVRMenu {
-  id: string
-  profile_id: string
-  name: string
-  greeting_text: string
-  is_active: boolean
-  ivr_options?: IVROption[]
-  created_at: string
-  updated_at: string
-}
-
-export interface IVROption {
-  id: string
-  ivr_menu_id: string
-  digit: string
-  description: string
-  agent_id: string | null
-  action_type: string
+  twilio_sid?: string
   created_at: string
   updated_at: string
 }
@@ -127,10 +117,8 @@ export interface IVROption {
 export interface ExternalIntegration {
   id: string
   profile_id: string
-  name: string
   integration_type: string
-  endpoint_url: string
-  auth_token?: string
+  configuration: Record<string, any>
   is_active: boolean
   created_at: string
   updated_at: string
@@ -252,53 +240,7 @@ export interface FunctionCallLog {
   created_at: string
 }
 
-export interface PhoneNumber {
-  id: string
-  profile_id: string
-  phone_number: string
-  friendly_name?: string
-  agent_id?: string
-  is_primary: boolean
-  is_active: boolean
-  twilio_sid?: string
-  created_at: string
-  updated_at: string
-}
 
-export interface IVRMenu {
-  id: string
-  profile_id: string
-  name: string
-  greeting_text: string
-  timeout_seconds: number
-  max_attempts: number
-  is_active: boolean
-  created_at: string
-  updated_at: string
-  ivr_options?: IVROption[]
-}
-
-export interface IVROption {
-  id: string
-  ivr_menu_id: string
-  digit: string
-  description: string
-  agent_id?: string
-  action_type: string
-  action_data?: Record<string, any>
-  created_at: string
-  updated_at: string
-}
-
-export interface ExternalIntegration {
-  id: string
-  profile_id: string
-  integration_type: string
-  configuration: Record<string, any>
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
 
 export interface AnalyticsData {
   totalCalls: number

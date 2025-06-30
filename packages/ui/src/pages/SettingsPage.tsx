@@ -25,6 +25,7 @@ export default function SettingsPage() {
     voice_name: 'Puck',
     language_code: 'en-US',
     agent_type: 'customer_service',
+    gemini_model: 'gemini-2.5-flash-preview-native-audio-dialog',
     
     // Phone Configuration
     twilio_phone_number: '',
@@ -47,6 +48,7 @@ export default function SettingsPage() {
         voice_name: 'Puck',
         language_code: 'en-US',
         agent_type: 'customer_service',
+        gemini_model: user.gemini_model || 'gemini-2.5-flash-preview-native-audio-dialog',
         twilio_phone_number: '',
         twilio_webhook_url: '',
         gemini_api_key: '',
@@ -68,7 +70,8 @@ export default function SettingsPage() {
       await updateUser({
         client_name: formData.client_name,
         company_name: formData.company_name,
-        phone_number: formData.phone_number
+        phone_number: formData.phone_number,
+        gemini_model: formData.gemini_model as 'gemini-live-2.5-flash-preview' | 'gemini-2.0-flash-live-001' | 'gemini-2.5-flash-preview-native-audio-dialog'
       });
     } catch (error) {
       console.error('Error saving profile:', error);
@@ -234,6 +237,25 @@ export default function SettingsPage() {
                 <option value="survey">Survey</option>
                 <option value="general">General Assistant</option>
               </select>
+            </div>
+
+            <div>
+              <label htmlFor="gemini-model" className="block text-sm font-medium text-gray-700">
+                Gemini AI Model
+              </label>
+              <select
+                id="gemini-model"
+                value={formData.gemini_model}
+                onChange={(e) => handleInputChange('gemini_model', e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+              >
+                <option value="gemini-2.5-flash-preview-native-audio-dialog">Gemini 2.5 Flash Preview (Native Audio Dialog)</option>
+                <option value="gemini-live-2.5-flash-preview">Gemini Live 2.5 Flash Preview</option>
+                <option value="gemini-2.0-flash-live-001">Gemini 2.0 Flash Live</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Choose the Gemini AI model for voice conversations
+              </p>
             </div>
 
             <div className="sm:col-span-2">

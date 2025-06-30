@@ -3,7 +3,8 @@ import { GoogleGenAI, Modality } from '@google/genai';
 export class GeminiLiveOfficial {
   constructor(options) {
     this.options = options;
-    this.geminiSession = null; // Initialize session to null
+    this.geminiSession = null;
+    this.responseQueue = [];
     this.onReady = options.onReady;
     this.onServerContent = options.onServerContent;
     this.onError = options.onError;
@@ -12,56 +13,79 @@ export class GeminiLiveOfficial {
 
   async connect() {
     try {
-      const ai = new GoogleGenAI({apiKey: this.options.apiKey});
+      console.log('🔄 Connecting to Gemini Live API using official @google/genai...');
+      console.log('🔧 Model:', this.options.model || 'gemini-2.5-flash-preview-native-audio-dialog');
+      console.log('🔑 API Key length:', this.options.apiKey ? this.options.apiKey.length : 'MISSING');
       
-      // Configure according to the latest API specifications
+      // Initialize GoogleGenAI client
+      const ai = new GoogleGenAI({
+        apiKey: this.options.apiKey
+      });
+      
+      // Prepare configuration according to official API  
       const config = {
         responseModalities: [Modality.AUDIO],
         speechConfig: this.options.speechConfig || {
           voiceConfig: { 
             prebuiltVoiceConfig: { 
-              voiceName: "default" 
+              voiceName: "Puck" 
             } 
           }
         },
-        systemInstruction: this.options.systemInstruction || "You are a helpful AI assistant on a phone call. Be concise and conversational.",
+        systemInstruction: this.options.systemInstruction || {
+          parts: [{ text: "You are a helpful AI assistant on a phone call. Wait for the caller to speak first, then respond naturally and conversationally." }]
+        },
+        // Enable proper Voice Activity Detection to handle natural conversation flow
+        // This allows the caller to speak first and Gemini will respond naturally
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            start_of_speech_sensitivity: 'START_SENSITIVITY_MEDIUM',
+            end_of_speech_sensitivity: 'END_SENSITIVITY_MEDIUM', 
+            silence_duration_ms: 1500,  // Wait 1.5 seconds of silence before considering speech ended
+            prefix_padding_ms: 300      // Include 300ms before detected speech
+          }
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}
       };
 
-      console.log('🔄 Connecting to Gemini Live API...');
-      
+      console.log('🔧 Config:', JSON.stringify(config, null, 2));
+
+      // Connect to Live API with callbacks
       this.geminiSession = await ai.live.connect({
-        model: this.options.model || 'gemini-live-2.5-flash-preview',
-        config: config, // Pass config as a separate property
+        model: this.options.model || 'gemini-2.5-flash-preview-native-audio-dialog',
         callbacks: {
           onopen: () => {
-            console.log('✅ Gemini session established.');
+            console.log('✅ Gemini Live session established');
             if (this.onReady) this.onReady();
           },
           onmessage: (message) => {
-            console.log('📨 Received message from Gemini:', JSON.stringify(message.serverContent || {}, null, 2).substring(0, 200) + '...');
-            if (this.onServerContent) this.onServerContent(message.serverContent || message);
+            console.log('📨 Received message from Gemini:', JSON.stringify(message, null, 2).substring(0, 200) + '...');
+            this.responseQueue.push(message);
+            if (this.onServerContent) this.onServerContent(message);
           },
           onerror: (error) => {
-            console.error('❌ Gemini session error:', error);
+            console.error('❌ Gemini Live session error:', error);
             if (this.onError) this.onError(error);
           },
-          onclose: () => {
-            console.log('ℹ️ Gemini session closed.');
+          onclose: (event) => {
+            console.log('ℹ️ Gemini Live session closed:', event.reason);
             if (this.onClose) this.onClose();
-          },
+          }
         },
+        config: config
       });
       
-      console.log('🎉 Gemini session connected successfully');
+      console.log('🎉 Gemini Live session connected successfully using official API');
       return true;
     } catch (error) {
-      console.error('❌ Failed to connect to Gemini:', error);
+      console.error('❌ Failed to connect to Gemini Live:', error);
       if (this.onError) this.onError(error);
       return false;
     }
   }
 
-  // Method for sending text (like an initial greeting)
+  // Method for sending text (only when responding to user input)
   sendText(text) {
     if (!this.geminiSession) {
       console.error('Cannot send text, Gemini session not ready.');
@@ -69,9 +93,10 @@ export class GeminiLiveOfficial {
     }
     
     try {
-      console.log(`🗣️ Sending text to Gemini: "${text}"`);
+      console.log(`�️ Sending text to Gemini: "${text}"`);
       this.geminiSession.sendClientContent({
         turns: [{ role: 'user', parts: [{ text }] }],
+        turnComplete: true
       });
       return true;
     } catch (error) {

@@ -175,6 +175,29 @@ async function main() {
       webhook_url: 'https://hooks.zapier.com/test',
       trigger_events: ['call.completed'],
       name: 'Test Zapier Integration',
+      description: 'Test integration for capturing lead information',
+      parameter_schema: {
+        type: 'object',
+        properties: {
+          customer_name: {
+            type: 'string',
+            description: 'The customer\'s full name'
+          },
+          phone_number: {
+            type: 'string',
+            description: 'The customer\'s phone number'
+          },
+          email: {
+            type: 'string',
+            description: 'The customer\'s email address'
+          },
+          interest: {
+            type: 'string',
+            description: 'What the customer is interested in'
+          }
+        },
+        required: ['customer_name', 'phone_number']
+      },
       active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()

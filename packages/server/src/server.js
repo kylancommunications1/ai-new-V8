@@ -1,4 +1,4 @@
-import { TwilioWebSocketServer } from '../../twilio-server/dist/index.js';
+   import { TwilioWebSocketServer } from '../../twilio-server/dist/index.js';
 import { GeminiLiveOfficial } from './gemini-live-official.js';
 // Import from dist instead of src
 import { FunctionCallHandler } from '../../tw2gem-server/dist/function-handler.js';
@@ -220,14 +220,106 @@ class Tw2GemServer extends TwilioWebSocketServer {
         console.log('✅ Server cleanup complete');
     }
     
-    async setupGeminiClient(socket) {
+    // Wait for Gemini to be fully ready
+    async waitForGeminiReady(socket, timeoutMs = 10000) {
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+            
+            const checkReady = () => {
+                if (socket.geminiReady) {
+                    console.log('✅ Gemini is ready!');
+                    resolve();
+                    return;
+                }
+                
+                if (Date.now() - startTime > timeoutMs) {
+                    console.error('❌ Timeout waiting for Gemini to be ready');
+                    reject(new Error('Timeout waiting for Gemini to be ready'));
+                    return;
+                }
+                
+                // Check again in 100ms
+                setTimeout(checkReady, 100);
+            };
+            
+            checkReady();
+        });
+    }
+
+    async setupGeminiClientWithAgent(socket, selectedAgent) {
         try {
-            // Create official Gemini Live client configuration with callbacks
+            // CRITICAL: Prevent multiple Gemini sessions for the same socket
+            if (socket.geminiLive) {
+                console.log('⚠️ Gemini client already exists for this socket, closing previous one');
+                try {
+                    socket.geminiLive.close();
+                } catch (err) {
+                    console.error('❌ Error closing previous Gemini client:', err);
+                }
+                socket.geminiLive = null;
+                socket.geminiReady = false;
+            }
+            
+            // Initialize session flags
+            socket.geminiReady = false;
+            
+            console.log(`🎤 Creating Gemini client with voice: ${selectedAgent.voice_name || 'Puck'}`);
+            
+            // Create function handler and load integrations
+            const functionHandler = new FunctionCallHandler(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_ROLE_KEY
+            );
+            
+            // Load Zapier integrations for this agent
+            if (selectedAgent.id && selectedAgent.id !== 'default') {
+                await functionHandler.loadZapierIntegrations(selectedAgent.id);
+                console.log(`✅ Loaded function integrations for agent: ${selectedAgent.name}`);
+            }
+            
+            // Get function definitions for Gemini
+            const functionDefinitions = functionHandler.getFunctionDefinitions();
+            console.log(`🔧 Registered ${functionDefinitions.length} functions for Gemini`);
+            
+            // Get user's model preference from profile
+            let userModel = 'gemini-2.0-flash-live-001'; // default
+            if (socket.userId) {
+                try {
+                    const { data: profile } = await supabase
+                        .from('profiles')
+                        .select('gemini_model')
+                        .eq('id', socket.userId)
+                        .single();
+                    
+                    if (profile?.gemini_model) {
+                        userModel = profile.gemini_model;
+                        console.log(`🤖 Using user's preferred model: ${userModel}`);
+                    }
+                } catch (error) {
+                    console.log('⚠️ Could not get user model preference, using default');
+                }
+            }
+            
+            // Create official Gemini Live client configuration with agent-specific settings
             const officialConfig = {
                 apiKey: this.geminiOptions.server.apiKey,
-                model: this.geminiOptions.setup.model,
-                speechConfig: this.geminiOptions.setup.generationConfig.speechConfig,
-                systemInstruction: this.geminiOptions.setup.systemInstruction,
+                model: userModel,
+                speechConfig: {
+                    voiceConfig: { 
+                        prebuiltVoiceConfig: { 
+                            voiceName: selectedAgent.voice_name || 'Puck'
+                        } 
+                    },
+                    languageCode: selectedAgent.language_code || 'en-US'
+                },
+                systemInstruction: {
+                    parts: [{ 
+                        text: selectedAgent.system_instruction || 
+                              'You are a professional AI assistant for customer service calls. Wait for the caller to speak first, then respond naturally and professionally. Be helpful, polite, and efficient. Listen actively and respond appropriately to what the caller says.'
+                    }]
+                },
+                // Add function definitions to enable function calling
+                tools: functionDefinitions.length > 0 ? functionDefinitions : undefined,
                 
                 // Set up callbacks directly in the constructor
                 onServerContent: (serverContent) => {
@@ -236,19 +328,23 @@ class Tw2GemServer extends TwilioWebSocketServer {
                 },
                 
                 onReady: () => {
-                    console.log('🤖 Gemini Live client connected and ready');
+                    console.log(`🤖 Gemini Live client connected for agent: ${selectedAgent.name}`);
+                    console.log(`🎤 Gemini voice: ${selectedAgent.voice_name}`);
+                    console.log(`🎧 Waiting for caller to speak first...`);
                     
-                    // Send initial greeting to start the conversation
-                    try {
-                        socket.geminiLive.sendText('Hello! Thank you for calling. How can I help you today?');
-                        console.log('🔄 Sent initial greeting to start conversation');
-                    } catch (error) {
-                        console.error('❌ Error sending initial greeting:', error);
-                    }
+                    // CRITICAL: Set the readiness flag to allow audio processing
+                    socket.geminiReady = true;
+                    console.log('✅ Gemini marked as ready - audio processing enabled');
+                    
+                    // REMOVED: Auto-greeting that forced Gemini to speak first
+                    // The caller should initiate the conversation naturally
                 },
                 
                 onError: (error) => {
                     console.error('❌ Gemini Live client error:', error);
+                    
+                    // CRITICAL: Mark Gemini as not ready on error
+                    socket.geminiReady = false;
                     
                     // If we have a Twilio client and streamSid, send an error message to the caller
                     if (socket.twilioStreamSid) {
@@ -283,45 +379,74 @@ class Tw2GemServer extends TwilioWebSocketServer {
                 
                 onClose: () => {
                     console.log('🔌 Gemini Live connection closed for call:', socket.twilioStreamSid);
+                    
+                    // CRITICAL: Mark Gemini as not ready when connection closes
+                    socket.geminiReady = false;
                 }
             };
 
             // Create a new official Gemini Live client for this socket
             const geminiClient = new GeminiLiveOfficial(officialConfig);
             
+            // Attach the function handler to the client for function call processing
+            geminiClient.functionHandler = functionHandler;
+            
+            // Store the Gemini client in the socket BEFORE connecting
+            socket.geminiLive = geminiClient;
+            
             // Connect to the official API
             await geminiClient.connect();
             
-            // Store the Gemini client in the socket
-            socket.geminiLive = geminiClient;
-            
+            console.log(`✅ Gemini client setup complete for agent: ${selectedAgent.name}`);
             return geminiClient;
         } catch (error) {
             console.error('❌ Error creating official Gemini Live client:', error);
             return null;
         }
     }
+
+    async setupGeminiClient(socket) {
+        // CRITICAL: This method should redirect to agent-aware setup to prevent hardcoded voices
+        console.warn('⚠️ setupGeminiClient called - redirecting to agent-aware setup');
+        
+        // Get the selected agent
+        let selectedAgent = socket.selectedAgent;
+        if (!selectedAgent && socket.twilioStreamSid) {
+            selectedAgent = activeCallAgents.get(socket.twilioStreamSid);
+        }
+        if (!selectedAgent) {
+            selectedAgent = agentRouter.defaultAgent;
+        }
+        
+        // Always use the agent-aware setup
+        return this.setupGeminiClientWithAgent(socket, selectedAgent);
+    }
     
     setupEventHandlers() {
         this.on('connection', (socket, request) => {
             console.log('📞 New WebSocket connection from Twilio');
+            console.log('🔍 Request URL:', request.url);
+            console.log('🔍 Request headers:', request.headers);
+            console.log('🔍 Connection origin:', request.headers.origin || 'Unknown');
             
             // Set socket as alive for ping/pong
             socket.isAlive = true;
+            
+            // Initialize Gemini session management flags
+            socket.geminiReady = false;
             
             // Set up pong handler
             socket.on('pong', () => {
                 socket.isAlive = true;
             });
             
-            // Create Gemini Live client for this call
-            this.setupGeminiClient(socket).catch(error => {
-                console.error('❌ Failed to setup Gemini client:', error);
-            });
+            // Create Gemini Live client for this call (will be properly configured when agent is assigned)
+            // Note: This initial setup will be replaced when the agent is properly assigned during 'start' event
+            console.log('📞 WebSocket connected, waiting for agent assignment...');
             socket.twilioStreamSid = null;
             
             // Handle Twilio messages
-            socket.on('message', (data) => {
+            socket.on('message', async (data) => {
                 try {
                     const message = JSON.parse(data.toString());
                     
@@ -331,7 +456,7 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         socket.isAlive = true;
                     }
                     
-                    this.handleTwilioMessage(socket, message);
+                    await this.handleTwilioMessage(socket, message);
                 } catch (error) {
                     console.error('❌ Error parsing Twilio message:', error);
                 }
@@ -342,6 +467,10 @@ class Tw2GemServer extends TwilioWebSocketServer {
                 
                 // Mark socket as not alive
                 socket.isAlive = false;
+                
+                // Clean up readiness and buffers
+                socket.geminiReady = false;
+                socket.audioBuffer = [];
                 
                 // Clean up agent mapping
                 if (socket.twilioStreamSid) {
@@ -354,6 +483,7 @@ class Tw2GemServer extends TwilioWebSocketServer {
                     try {
                         socket.geminiLive.close();
                         socket.geminiLive = null;
+                        socket.geminiReady = false;
                     } catch (err) {
                         console.error('❌ Error closing Gemini client on socket close:', err);
                     }
@@ -377,7 +507,9 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         } catch (err) {
                             // Ignore errors when closing
                         }
-                        this.setupGeminiClient(socket).catch(error => {
+                        // Use agent-aware setup to maintain consistent voice
+                        const agent = socket.selectedAgent || agentRouter.defaultAgent;
+                        this.setupGeminiClientWithAgent(socket, agent).catch(error => {
                             console.error('❌ Failed to recreate Gemini client:', error);
                         });
                     }
@@ -398,62 +530,87 @@ class Tw2GemServer extends TwilioWebSocketServer {
 
     handleGeminiResponse(socket, serverContent) {
         try {
-            // Handle audio response from Gemini
-            if (serverContent.modelTurn?.parts) {
-                for (const part of serverContent.modelTurn.parts) {
-                    if (part.inlineData?.mimeType?.startsWith('audio/') && part.inlineData.data) {
-                        console.log('🎵 Received audio from Gemini:', {
-                            mimeType: part.inlineData.mimeType,
-                            dataLength: part.inlineData.data.length,
-                            streamSid: socket.twilioStreamSid
-                        });
+            // Handle official Gemini Live API message format
+            console.log('🔍 Processing Gemini response:', JSON.stringify(serverContent, null, 2).substring(0, 300));
+            
+            // Handle server content from official API
+            if (serverContent.serverContent) {
+                const content = serverContent.serverContent;
+                
+                // Handle audio response from modelTurn
+                if (content.modelTurn?.parts) {
+                    for (const part of content.modelTurn.parts) {
+                        if (part.inlineData?.mimeType?.startsWith('audio/') && part.inlineData.data) {
+                            console.log('🎵 Received audio from Gemini:', {
+                                mimeType: part.inlineData.mimeType,
+                                dataLength: part.inlineData.data.length,
+                                streamSid: socket.twilioStreamSid
+                            });
+                            
+                            // Convert Gemini's PCM audio (24kHz) to Twilio's muLaw format (8kHz)
+                            const twilioAudio = AudioConverter.convertBase64PCM24kToBase64MuLaw8k(part.inlineData.data);
+                            
+                            // Send audio to Twilio
+                            const audioMessage = {
+                                event: 'media',
+                                streamSid: socket.twilioStreamSid,
+                                media: {
+                                    payload: twilioAudio
+                                }
+                            };
+                            
+                            socket.send(JSON.stringify(audioMessage));
+                            console.log('🎵 Sent audio to Twilio, payload length:', twilioAudio.length);
+                        }
                         
-                        // Convert Gemini's PCM audio to Twilio's muLaw format
-                        const twilioAudio = AudioConverter.convertBase64PCM24kToBase64MuLaw8k(part.inlineData.data);
+                        // Handle function calls
+                        if (part.functionCall) {
+                            this.handleFunctionCall(socket, part.functionCall);
+                        }
                         
-                        // Send audio to Twilio
-                        const audioMessage = {
-                            event: 'media',
-                            streamSid: socket.twilioStreamSid,
-                            media: {
-                                payload: twilioAudio
-                            }
-                        };
-                        
-                        socket.send(JSON.stringify(audioMessage));
-                        console.log('🎵 Sent audio to Twilio, payload length:', twilioAudio.length);
+                        // Handle text responses (for debugging)
+                        if (part.text) {
+                            console.log('💬 Gemini text response:', part.text);
+                        }
                     }
-                    
-                    // Handle function calls
-                    if (part.functionCall) {
-                        this.handleFunctionCall(socket, part.functionCall);
-                    }
+                }
+
+                // Handle transcriptions according to official guide
+                if (content.inputTranscription) {
+                    console.log('🎤 Input transcription:', content.inputTranscription.text);
+                }
+
+                if (content.outputTranscription) {
+                    console.log('🔊 Output transcription:', content.outputTranscription.text);
+                }
+
+                // Handle interruptions according to official guide
+                if (content.interrupted) {
+                    console.log('⚠️ Generation was interrupted');
+                    // If realtime playback is implemented, stop playing audio and clear queued playback here
                 }
             }
             
-            // Handle text responses (for debugging)
-            if (serverContent.modelTurn?.parts) {
-                for (const part of serverContent.modelTurn.parts) {
-                    if (part.text) {
-                        console.log('💬 Gemini text response:', part.text);
+            // Handle direct audio data (fallback for different response formats)
+            if (serverContent.data && !serverContent.serverContent) {
+                console.log('🎵 Received direct audio data:', {
+                    dataLength: serverContent.data.length,
+                    streamSid: socket.twilioStreamSid
+                });
+                
+                const twilioAudio = AudioConverter.convertBase64PCM24kToBase64MuLaw8k(serverContent.data);
+                
+                const audioMessage = {
+                    event: 'media',
+                    streamSid: socket.twilioStreamSid,
+                    media: {
+                        payload: twilioAudio
                     }
-                }
+                };
+                
+                socket.send(JSON.stringify(audioMessage));
             }
-
-            // Handle transcriptions according to official guide
-            if (serverContent.inputTranscription) {
-                console.log('🎤 Input transcription:', serverContent.inputTranscription.text);
-            }
-
-            if (serverContent.outputTranscription) {
-                console.log('🔊 Output transcription:', serverContent.outputTranscription.text);
-            }
-
-            // Handle interruptions according to official guide
-            if (serverContent.interrupted) {
-                console.log('⚠️ Generation was interrupted');
-                // If realtime playback is implemented, stop playing audio and clear queued playback here
-            }
+            
         } catch (error) {
             console.error('❌ Error handling Gemini response:', error);
         }
@@ -465,43 +622,42 @@ class Tw2GemServer extends TwilioWebSocketServer {
             const { name, args } = functionCall;
             console.log(`🔧 Function call from Gemini: ${name}`, args);
             
-            // Get the agent ID from the socket
-            const agentId = socket.agentId;
-            if (!agentId) {
-                console.error('❌ No agent ID found for function call');
+            // Get the function handler from the Gemini client
+            const functionHandler = socket.geminiLive?.functionHandler;
+            if (!functionHandler) {
+                console.error('❌ No function handler available for function call');
                 return;
             }
             
+            // Get the agent ID from the socket
+            const agentId = socket.agentId || socket.selectedAgent?.id;
+            
             // Create a unique call ID
             const callId = `call-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            
-            // Create a function call handler
-            const functionHandler = new FunctionCallHandler(
-                process.env.SUPABASE_URL,
-                process.env.SUPABASE_SERVICE_ROLE_KEY
-            );
-            
-            // Load Zapier integrations for this agent
-            await functionHandler.loadZapierIntegrations(agentId);
             
             // Execute the function
             const response = await functionHandler.executeFunction({
                 name,
                 args,
                 callId,
-                agentId
+                agentId,
+                userId: socket.userId
             });
             
             console.log(`🔧 Function response: ${name}`, response);
             
             // Send the function response back to Gemini
-            socket.geminiLive.sendFunctionResponse(name, response.result || response.error);
+            if (socket.geminiLive && socket.geminiLive.sendFunctionResponse) {
+                socket.geminiLive.sendFunctionResponse(name, response.result || response.error);
+            } else {
+                console.error('❌ Cannot send function response - Gemini client not available');
+            }
             
         } catch (error) {
             console.error('❌ Error handling function call:', error);
             
             // Send error response back to Gemini
-            if (functionCall && functionCall.name) {
+            if (functionCall && functionCall.name && socket.geminiLive?.sendFunctionResponse) {
                 socket.geminiLive.sendFunctionResponse(functionCall.name, {
                     error: error.message || 'Unknown error occurred'
                 });
@@ -509,7 +665,7 @@ class Tw2GemServer extends TwilioWebSocketServer {
         }
     }
 
-    handleTwilioMessage(socket, message) {
+    async handleTwilioMessage(socket, message) {
         switch (message.event) {
             case 'connected':
                 console.log('🔗 Twilio connected');
@@ -519,7 +675,50 @@ class Tw2GemServer extends TwilioWebSocketServer {
             case 'start':
                 console.log('🎬 Call started:', message.start?.streamSid);
                 socket.twilioStreamSid = message.start?.streamSid;
+                socket.callSid = message.start?.callSid;
                 socket.isAlive = true;
+                
+                // CRITICAL: Set readiness flags to prevent audio processing before Gemini is ready
+                socket.geminiReady = false;
+                socket.audioBuffer = []; // Buffer audio until Gemini is ready
+                
+                // CRITICAL: Transfer agent from CallSid to StreamSid mapping
+                let selectedAgent = null;
+                
+                // Try to get agent by CallSid first
+                if (socket.callSid) {
+                    selectedAgent = activeCallAgents.get(socket.callSid);
+                    if (selectedAgent) {
+                        console.log(`✅ Found agent by CallSid: ${selectedAgent.name}`);
+                        // Transfer the agent mapping to StreamSid
+                        activeCallAgents.set(socket.twilioStreamSid, selectedAgent);
+                        // Keep the CallSid mapping for cleanup
+                    }
+                }
+                
+                // If no agent found by CallSid, try to route now as fallback
+                if (!selectedAgent) {
+                    console.log('⚠️ No agent found by CallSid, attempting fallback routing');
+                    try {
+                        const routingResult = await agentRouter.routeIncomingCall({
+                            CallSid: socket.callSid,
+                            From: message.start?.customParameters?.From || 'unknown',
+                            To: message.start?.customParameters?.To || 'unknown'
+                        });
+                        selectedAgent = routingResult.agent;
+                        activeCallAgents.set(socket.twilioStreamSid, selectedAgent);
+                        console.log(`🔄 Fallback routing assigned agent: ${selectedAgent.name}`);
+                    } catch (error) {
+                        console.error('❌ Fallback routing failed:', error);
+                        // Use default agent as final fallback
+                        selectedAgent = agentRouter.defaultAgent;
+                        activeCallAgents.set(socket.twilioStreamSid, selectedAgent);
+                        console.log('⚠️ Using default agent as final fallback');
+                    }
+                }
+                
+                // Store agent reference on socket for immediate access
+                socket.selectedAgent = selectedAgent;
                 
                 // Store the agent ID in the socket if available
                 if (message.start?.customParameters?.agent_id) {
@@ -536,30 +735,87 @@ class Tw2GemServer extends TwilioWebSocketServer {
                     this.setupGhlIntegration(socket);
                 }
                 
-                // Make sure we have a valid Gemini Live client
-                if (!socket.geminiLive) {
-                    console.log('⚠️ Creating new Gemini Live client');
-                    this.setupGeminiClient(socket).catch(error => {
-                        console.error('❌ Failed to create Gemini client:', error);
-                    });
+                // CRITICAL: Setup Gemini client and WAIT for it to be fully ready
+                console.log(`🤖 Setting up Gemini client for agent: ${selectedAgent.name}`);
+                try {
+                    await this.setupGeminiClientWithAgent(socket, selectedAgent);
+                    
+                    // WAIT for Gemini to be fully ready before allowing audio processing
+                    console.log('⏳ Waiting for Gemini to be fully ready...');
+                    await this.waitForGeminiReady(socket, 10000); // Wait up to 10 seconds
+                    
+                    console.log(`✅ Gemini fully ready for conversation on stream: ${socket.twilioStreamSid}`);
+                    
+                    // Process any buffered audio now that Gemini is ready
+                    if (socket.audioBuffer && socket.audioBuffer.length > 0) {
+                        console.log(`🎵 Processing ${socket.audioBuffer.length} buffered audio chunks`);
+                        for (const audioData of socket.audioBuffer) {
+                            try {
+                                socket.geminiLive.sendAudio(audioData);
+                            } catch (err) {
+                                console.error('❌ Error sending buffered audio:', err);
+                            }
+                        }
+                        socket.audioBuffer = []; // Clear buffer
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Failed to create Gemini client:', error);
+                    // Use a fallback to ensure calls don't fail completely
+                    try {
+                        await this.setupGeminiClientWithAgent(socket, agentRouter.defaultAgent);
+                        await this.waitForGeminiReady(socket, 5000);
+                        console.log('⚠️ Using default agent as fallback');
+                    } catch (fallbackError) {
+                        console.error('❌ Fallback Gemini setup also failed:', fallbackError);
+                        socket.geminiReady = false;
+                    }
                 }
-                
-                console.log('🤖 Gemini Live client ready for audio');
-                
-                // Gemini will automatically greet the caller based on system instructions
-                console.log(`🎤 Gemini ready for conversation on stream: ${socket.twilioStreamSid}`);
                 break;
                 
             case 'media':
                 // Make sure socket is marked as alive
                 socket.isAlive = true;
                 
+                // CRITICAL FIX: Only process inbound audio (from caller) to prevent feedback loop
+                // Twilio sends both inbound (from caller) and outbound (to caller) audio
+                // We must ONLY send inbound audio to Gemini to prevent self-conversation
+                if (message.media?.track !== 'inbound') {
+                    // Skip outbound audio (our own Gemini responses) to prevent feedback loop
+                    return;
+                }
+                
+                // CRITICAL: Check if Gemini is fully ready before processing audio
+                if (!socket.geminiReady) {
+                    // Buffer audio until Gemini is ready
+                    if (!socket.audioBuffer) {
+                        socket.audioBuffer = [];
+                    }
+                    
+                    if (message.media?.payload) {
+                        // Convert and buffer the audio
+                        const audioData = AudioConverter.convertBase64MuLawToBase64PCM16k(message.media.payload);
+                        socket.audioBuffer.push(audioData);
+                        
+                        console.log('📦 Buffering audio - Gemini not ready yet. Buffer size:', socket.audioBuffer.length);
+                        
+                        // Limit buffer size to prevent memory issues
+                        if (socket.audioBuffer.length > 50) {
+                            socket.audioBuffer.shift(); // Remove oldest audio
+                        }
+                    }
+                    return; // Don't process audio until Gemini is ready
+                }
+                
                 // Check if we have a Gemini client
                 if (!socket.geminiLive) {
                     console.log('⚠️ No Gemini client for media event, creating one');
-                    this.setupGeminiClient(socket).catch(error => {
+                    // Use agent-aware setup to prevent voice switching
+                    const agent = socket.selectedAgent || agentRouter.defaultAgent;
+                    this.setupGeminiClientWithAgent(socket, agent).catch(error => {
                         console.error('❌ Failed to create Gemini client for media:', error);
                     });
+                    return; // Skip processing audio until Gemini is ready
                 }
                 
                 if (socket.geminiLive && message.media?.payload) {
@@ -568,10 +824,12 @@ class Tw2GemServer extends TwilioWebSocketServer {
                         // Convert Twilio's muLaw to PCM 16kHz for Gemini
                         const audioData = AudioConverter.convertBase64MuLawToBase64PCM16k(message.media.payload);
                         
-                        console.log('🎤 Sending audio to Gemini:', {
+                        console.log('🎤 Sending INBOUND audio to Gemini:', {
                             originalLength: message.media.payload.length,
                             convertedLength: audioData.length,
-                            streamSid: socket.twilioStreamSid
+                            streamSid: socket.twilioStreamSid,
+                            track: message.media.track,
+                            geminiReady: socket.geminiReady
                         });
                         
                         // Send audio to Gemini Live in the correct format
@@ -579,10 +837,10 @@ class Tw2GemServer extends TwilioWebSocketServer {
                             socket.geminiLive.sendAudio(audioData);
                         } catch (err) {
                             console.error('❌ Error sending audio to Gemini:', err);
-                            // Try to recreate the Gemini client
-                            this.setupGeminiClient(socket).catch(error => {
-                                console.error('❌ Failed to recreate Gemini client after error:', error);
-                            });
+                            // If Gemini is not ready, mark it as such and start buffering
+                            socket.geminiReady = false;
+                            if (!socket.audioBuffer) socket.audioBuffer = [];
+                            socket.audioBuffer.push(audioData);
                         }
                     } catch (error) {
                         console.error('❌ Audio conversion error:', error);
@@ -599,10 +857,15 @@ class Tw2GemServer extends TwilioWebSocketServer {
                     console.log(`🧹 Cleaned up agent mapping for call: ${socket.twilioStreamSid}`);
                 }
                 
+                // Clean up readiness and buffers
+                socket.geminiReady = false;
+                socket.audioBuffer = [];
+                
                 // Close Gemini connection gracefully
                 if (socket.geminiLive) {
                     try {
                         socket.geminiLive.close();
+                        socket.geminiLive = null;
                     } catch (err) {
                         console.error('❌ Error closing Gemini client:', err);
                     }
@@ -660,10 +923,10 @@ class Tw2GemServer extends TwilioWebSocketServer {
             }
             
             // Initialize function handler with GHL service
-            if (socket.geminiLive && socket.geminiLive.functionHandler) {
+            if (socket.geminiLive?.functionHandler) {
                 try {
-                    await socket.geminiLive.functionHandler.setGhlService(api_key, location_id);
-                    console.log('✅ GHL service initialized for this call');
+                    socket.geminiLive.functionHandler.setGhlService(api_key, location_id);
+                    console.log('✅ GHL service initialized for function handler');
                 } catch (error) {
                     console.error('❌ Error initializing GHL service for function handler:', error);
                 }
@@ -827,16 +1090,16 @@ const httpServer = createHttpServer(app);
 const server = new Tw2GemServer({
     serverOptions: {
         server: httpServer,
-        path: "/twilio"
+        path: "/twilio"  // This should match the path in WEBSOCKET_URL
     },
     geminiOptions: {
         server: {
             apiKey: process.env.GEMINI_API_KEY,
         },
-        primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-live-2.5-flash-preview',
+        primaryModel: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
         fallbackModel: process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
         setup: {
-            model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-live-2.5-flash-preview',
+            model: process.env.GEMINI_PRIMARY_MODEL || 'gemini-2.5-flash-preview-native-audio-dialog',
             responseModalities: [Modality.AUDIO],
             generationConfig: {
                 candidateCount: 1,
@@ -862,15 +1125,16 @@ const server = new Tw2GemServer({
             systemInstruction: {
                 parts: [{ 
                     text: process.env.SYSTEM_INSTRUCTION || 
-                          'You are a professional AI assistant for customer service calls. IMPORTANT: You MUST speak first immediately when the call connects. Start with a warm greeting like "Hello! Thank you for calling. How can I help you today?" Be helpful, polite, and efficient. Always initiate the conversation and maintain a friendly, professional tone throughout the call.'
+                          'You are a professional AI assistant for customer service calls. Wait for the caller to speak first, then respond naturally and professionally. Be helpful, polite, and efficient. Listen actively and respond appropriately to what the caller says.'
                 }]
             },
+            // Voice Activity Detection: Allows caller to speak first, then Gemini responds naturally
             realtimeInputConfig: {
                 automaticActivityDetection: {
-                    startOfSpeechSensitivity: 'START_SENSITIVITY_MEDIUM',
-                    endOfSpeechSensitivity: 'END_SENSITIVITY_MEDIUM',
-                    silenceDurationMs: 1000,
-                    prefixPaddingMs: 500
+                    start_of_speech_sensitivity: 'START_SENSITIVITY_MEDIUM',
+                    end_of_speech_sensitivity: 'END_SENSITIVITY_MEDIUM',
+                    silence_duration_ms: 1500,  // Wait 1.5 seconds of silence before considering speech ended
+                    prefix_padding_ms: 300      // Include 300ms before detected speech
                 }
             },
             inputAudioTranscription: {},
@@ -884,26 +1148,10 @@ const server = new Tw2GemServer({
 server.onNewCall = (socket) => {
     console.log('📞 New call from Twilio:', socket.twilioStreamSid);
     console.log('🕐 Call started at:', new Date().toISOString());
+    console.log('🔌 WebSocket connection established successfully');
     
-    // Get the selected agent for this call
-    const selectedAgent = activeCallAgents.get(socket.twilioStreamSid);
-    if (selectedAgent) {
-        console.log(`🎯 Call ${socket.twilioStreamSid} assigned to agent: ${selectedAgent.name} (${selectedAgent.agent_type})`);
-        
-        // Store agent info on socket for later use
-        socket.selectedAgent = selectedAgent;
-        
-        // Update Gemini configuration for this specific call
-        if (socket.geminiLive && socket.geminiLive.setup) {
-            // Update voice and language
-            socket.geminiLive.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName = selectedAgent.voice_name || 'Puck';
-            socket.geminiLive.setup.generationConfig.speechConfig.languageCode = selectedAgent.language_code || 'en-US';
-            
-            // Update system instruction
-            socket.geminiLive.setup.systemInstruction.parts[0].text = selectedAgent.system_instruction || 
-                'You are a professional AI assistant for customer service calls. IMPORTANT: You MUST speak first immediately when the call connects. Start with a warm greeting like "Hello! Thank you for calling. How can I help you today?" Be helpful, polite, and efficient. Always initiate the conversation and maintain a friendly, professional tone throughout the call.';
-        }
-    }
+    // Agent assignment will happen in the 'start' event handler
+    // This ensures proper CallSid to StreamSid mapping
 };
 
 // Removed global server.geminiLive.onReady handler - each socket has its own geminiLive instance
@@ -942,12 +1190,13 @@ const activeCallAgents = new Map();
 // Twilio webhook for incoming calls
 app.post('/webhook/voice', async (req, res) => {
     console.log('📞 Incoming call webhook:', req.body);
+    console.log('🔗 WebSocket URL will be:', WEBSOCKET_URL);
     
     // Create a TwiML response immediately to ensure we respond quickly
     const twiml = new twilio.twiml.VoiceResponse();
     const connect = twiml.connect();
     connect.stream({
-        url: `${WEBSOCKET_URL}/twilio`
+        url: WEBSOCKET_URL  // Use WEBSOCKET_URL directly since it includes the path
     });
     
     // Send the response immediately
@@ -960,8 +1209,14 @@ app.post('/webhook/voice', async (req, res) => {
         const routingResult = await agentRouter.routeIncomingCall(req.body);
         const { agent: selectedAgent, routing } = routingResult;
         
-        // Store agent for this call
+        // Store agent for this call using BOTH CallSid AND a backup method
+        // We'll use CallSid initially, then transfer to StreamSid when WebSocket connects
         activeCallAgents.set(req.body.CallSid, selectedAgent);
+        
+        // Also store by phone number as backup for routing
+        if (req.body.To) {
+            activeCallAgents.set(`phone:${req.body.To}:${Date.now()}`, selectedAgent);
+        }
         
         console.log(`🎯 Routed call ${req.body.CallSid} to agent: ${selectedAgent.name} (${selectedAgent.agent_type}) - Action: ${routing.action}`);
         
@@ -1078,7 +1333,7 @@ app.post('/webhook/ivr-selection', async (req, res) => {
         // Connect bidirectional stream for conversation
         const connect = twiml.connect();
         connect.stream({
-            url: `${WEBSOCKET_URL}/twilio`
+            url: WEBSOCKET_URL  // WEBSOCKET_URL already includes /twilio path
         });
         
         res.type('text/xml');
@@ -1138,7 +1393,7 @@ app.post('/webhook/ivr-fallback', async (req, res) => {
         // Connect bidirectional stream for conversation
         const connect = twiml.connect();
         connect.stream({
-            url: `${WEBSOCKET_URL}/twilio`
+            url: WEBSOCKET_URL  // WEBSOCKET_URL already includes /twilio path
         });
         
         res.type('text/xml');
@@ -1382,7 +1637,7 @@ app.get('/test/twilio', async (req, res) => {
                 account_sid: account.sid,
                 account_status: account.status,
                 webhook_url: `${WEBHOOK_URL}/webhook/voice`,
-                stream_url: `${WEBSOCKET_URL}/twilio`
+                stream_url: WEBSOCKET_URL  // WEBSOCKET_URL already includes /twilio path
             }
         });
     } catch (error) {
@@ -1468,7 +1723,7 @@ app.get('/test/system', async (req, res) => {
                 status: 'pass',
                 account_status: account.status,
                 webhook_url: `${WEBHOOK_URL}/webhook/voice`,
-                stream_url: `${WEBSOCKET_URL}/twilio`
+                stream_url: WEBSOCKET_URL  // WEBSOCKET_URL already includes /twilio path
             };
         } else {
             results.tests.twilio = {
@@ -1522,7 +1777,7 @@ app.get('/test/system', async (req, res) => {
         results.tests.websocket = {
             status: 'pass',
             port: PORT,
-            url: `${WEBSOCKET_URL}/twilio`,
+            url: WEBSOCKET_URL,  // WEBSOCKET_URL already includes /twilio path
             message: 'Ready for Twilio streams'
         };
     } catch (error) {
