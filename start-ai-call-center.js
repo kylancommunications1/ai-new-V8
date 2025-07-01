@@ -55,6 +55,11 @@ const frontendEnv = `# AI Call Center Frontend Configuration (Auto-generated fro
 VITE_SUPABASE_URL=${process.env.SUPABASE_URL}
 VITE_SUPABASE_ANON_KEY=${process.env.SUPABASE_ANON_KEY}
 VITE_API_BASE_URL=http://localhost:12001
+VITE_APP_NAME="AI Call Center"
+VITE_APP_VERSION="1.0.0"
+VITE_ENABLE_DEMO_MODE=true
+VITE_ENABLE_ANALYTICS=true
+VITE_ENABLE_REAL_TIME=true
 `;
 fs.writeFileSync(frontendEnvPath, frontendEnv);
 console.log('✅ Frontend environment configured successfully!');

@@ -10,7 +10,7 @@ import {
 
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
+import { ApiService } from '../services/api';
 import { RealtimeService } from '../services/realtime';
 import type { DNCEntry } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -42,7 +42,7 @@ export default function DNCPage() {
 
     try {
       setLoading(true);
-      const entries = await DatabaseService.getDNCEntries(user.id);
+      const entries = await ApiService.getDNCList(user.id);
       setDncEntries(entries);
     } catch (error) {
       console.error('Error loading DNC entries:', error);
@@ -87,17 +87,8 @@ export default function DNCPage() {
       setDncEntries(prev => prev.filter(entry => entry.id !== entryId));
       
       // Make API call
-      const response = await fetch(`/api/dnc/${entryId}`, {
-        method: 'DELETE'
-      });
-
-      if (response.ok) {
-        toast.success('Number removed from DNC list');
-      } else {
-        // Revert optimistic update on failure
-        await loadDNCEntries();
-        throw new Error('Failed to delete DNC entry');
-      }
+      await ApiService.deleteDNCEntry(entryId);
+      toast.success('Number removed from DNC list');
     } catch (error) {
       console.error('Error deleting DNC entry:', error);
       toast.error('Failed to remove number from DNC list');
@@ -354,7 +345,7 @@ function AddDNCModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
 
     setLoading(true);
     try {
-      await DatabaseService.addDNCEntry({
+      await ApiService.addDNCEntry({
         ...formData,
         profile_id: user.id,
         is_active: true,
@@ -503,7 +494,7 @@ function BulkUploadModal({ onClose, onSuccess }: { onClose: () => void; onSucces
           added_date: new Date().toISOString(),
           source: entry.source as DNCEntry['source']
         }));
-        await DatabaseService.bulkAddDNCEntries(entriesWithDefaults);
+        await ApiService.bulkAddDNCEntries(entriesWithDefaults);
         toast.success(`Added ${entries.length} numbers to DNC list`);
         onSuccess();
         onClose();

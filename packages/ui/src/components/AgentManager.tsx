@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { DatabaseService } from '../services/database';
-import { useAuth } from '../hooks/useAuth';
+import { ApiService } from '../services/api';
+import { useUser } from '../contexts/UserContext';
 import type { AIAgent } from '../lib/supabase';
+import toast from 'react-hot-toast';
+import {
+  PlusIcon,
+  PencilIcon,
+  TrashIcon,
+  UserGroupIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  EyeIcon,
+  EyeSlashIcon
+} from '@heroicons/react/24/outline';
 
 const VOICE_OPTIONS = [
   { value: 'Puck', label: 'Puck (Male, Neutral)' },
@@ -73,7 +84,7 @@ const DEFAULT_SYSTEM_INSTRUCTIONS = {
 };
 
 const AgentManager: React.FC = () => {
-  const { user } = useAuth();
+  const { user } = useUser();
   const [agents, setAgents] = useState<AIAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<AIAgent | null>(null);
@@ -114,10 +125,11 @@ const AgentManager: React.FC = () => {
         return;
       }
       
-      const agentData = await DatabaseService.getAIAgents(user.id);
+      const agentData = await ApiService.getAgents(user.id);
       setAgents(agentData);
     } catch (error) {
       console.error('Error loading agents:', error);
+      toast.error('Failed to load agents');
     } finally {
       setLoading(false);
     }
@@ -158,7 +170,10 @@ const AgentManager: React.FC = () => {
     try {
       if (editingAgent) {
         // Update existing agent
-        await DatabaseService.updateAIAgent(editingAgent.id, formData);
+        const updatedAgent = await ApiService.updateAgent(editingAgent.id, formData);
+        if (updatedAgent) {
+          toast.success('Agent updated successfully');
+        }
       } else {
         // Create new agent
         if (!user) {
@@ -166,10 +181,10 @@ const AgentManager: React.FC = () => {
           return;
         }
         
-        await DatabaseService.createAIAgent({
-          ...formData,
-          profile_id: user.id
-        } as AIAgent);
+        const newAgent = await ApiService.createAgent(user.id, formData);
+        if (newAgent) {
+          toast.success('Agent created successfully');
+        }
       }
       
       // Reset form and reload agents
@@ -197,7 +212,7 @@ const AgentManager: React.FC = () => {
       loadAgents();
     } catch (error) {
       console.error('Error saving agent:', error);
-      alert('Error saving agent. Please try again.');
+      toast.error('Error saving agent. Please try again.');
     }
   };
 
@@ -231,21 +246,27 @@ const AgentManager: React.FC = () => {
     }
     
     try {
-      await DatabaseService.deleteAIAgent(agentId);
+      await ApiService.deleteAgent(agentId);
+      toast.success('Agent deleted successfully');
       loadAgents();
     } catch (error) {
       console.error('Error deleting agent:', error);
-      alert('Error deleting agent. Please try again.');
+      toast.error('Error deleting agent. Please try again.');
     }
   };
 
   const handleToggleActive = async (agent: AIAgent) => {
     try {
-      await DatabaseService.toggleAgent(agent.id, !agent.is_active);
-      loadAgents();
+      const updatedAgent = await ApiService.updateAgent(agent.id, {
+        is_active: !agent.is_active
+      });
+      if (updatedAgent) {
+        toast.success(`Agent ${updatedAgent.is_active ? 'activated' : 'deactivated'}`);
+        loadAgents();
+      }
     } catch (error) {
       console.error('Error toggling agent status:', error);
-      alert('Error updating agent status. Please try again.');
+      toast.error('Error updating agent status. Please try again.');
     }
   };
 
@@ -279,29 +300,125 @@ const AgentManager: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">AI Agent Management</h1>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">AI Agents</h1>
+          <p className="text-gray-600">Manage your AI agents and their configurations</p>
+        </div>
         <button
           onClick={handleNewAgent}
-          className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded"
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
         >
-          Create New Agent
+          <PlusIcon className="h-5 w-5" />
+          Create Agent
         </button>
       </div>
 
       {loading ? (
-        <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4">Loading agents...</p>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
         </div>
       ) : (
         <>
-          {showForm ? (
-            <div className="bg-white shadow-md rounded-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold mb-4">
-                {editingAgent ? 'Edit Agent' : 'Create New Agent'}
-              </h2>
+          {/* Agents Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {agents.map((agent) => (
+              <div key={agent.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`h-10 w-10 rounded-full flex items-center justify-center ${
+                      agent.is_active ? 'bg-green-100' : 'bg-gray-100'
+                    }`}>
+                      <UserGroupIcon className={`h-6 w-6 ${
+                        agent.is_active ? 'text-green-600' : 'text-gray-400'
+                      }`} />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{agent.name}</h3>
+                      <p className="text-sm text-gray-500">
+                        {getAgentTypeLabel(agent.agent_type)}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleToggleActive(agent)}
+                      className={`p-1 rounded-full ${
+                        agent.is_active ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-50'
+                      }`}
+                    >
+                      {agent.is_active ? (
+                        <CheckCircleIcon className="h-5 w-5" />
+                      ) : (
+                        <XCircleIcon className="h-5 w-5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleEdit(agent)}
+                      className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full"
+                    >
+                      <PencilIcon className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(agent.id)}
+                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full"
+                    >
+                      <TrashIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-600">{agent.description}</p>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Voice: {agent.voice_name}</span>
+                    <span>Language: {agent.language_code}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Direction: {agent.call_direction || 'inbound'}</span>
+                    <span>Max Calls: {agent.max_concurrent_calls || 5}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className={`px-2 py-1 rounded-full ${
+                      agent.is_active 
+                        ? 'bg-green-100 text-green-800' 
+                        : 'bg-gray-100 text-gray-800'
+                    }`}>
+                      {agent.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                    <span className="text-gray-500">
+                      Created {new Date(agent.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {agents.length === 0 && (
+            <div className="text-center py-12">
+              <UserGroupIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No agents found</h3>
+              <p className="text-gray-500 mb-4">Get started by creating your first AI agent</p>
+              <button
+                onClick={handleNewAgent}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Create Agent
+              </button>
+            </div>
+          )}
+
+          {/* Modal */}
+          {showForm && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+                <h2 className="text-xl font-bold mb-4">
+                  {editingAgent ? 'Edit Agent' : 'Create New Agent'}
+                </h2>
               <form onSubmit={handleSubmit}>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -587,127 +704,23 @@ const AgentManager: React.FC = () => {
                   )}
                 </div>
                 
-                <div className="flex justify-end mt-6 space-x-4">
+                <div className="flex justify-end gap-3 pt-4">
                   <button
                     type="button"
                     onClick={handleCancel}
-                    className="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100"
+                    className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   >
                     {editingAgent ? 'Update Agent' : 'Create Agent'}
                   </button>
                 </div>
               </form>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {agents.length === 0 ? (
-                <div className="md:col-span-2 lg:col-span-3 text-center py-8">
-                  <p className="text-gray-500">No AI agents found. Create your first agent to get started.</p>
-                </div>
-              ) : (
-                agents.map(agent => (
-                  <div
-                    key={agent.id}
-                    className={`bg-white shadow-md rounded-lg p-6 border-l-4 ${
-                      agent.is_active ? 'border-green-500' : 'border-gray-300'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <h3 className="text-lg font-semibold">{agent.name}</h3>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => handleToggleActive(agent)}
-                          className={`p-1 rounded ${
-                            agent.is_active
-                              ? 'text-green-600 hover:bg-green-100'
-                              : 'text-gray-400 hover:bg-gray-100'
-                          }`}
-                          title={agent.is_active ? 'Deactivate' : 'Activate'}
-                        >
-                          {agent.is_active ? (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                            </svg>
-                          ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => handleEdit(agent)}
-                          className="p-1 text-blue-600 hover:bg-blue-100 rounded"
-                          title="Edit"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={() => handleDelete(agent.id)}
-                          className="p-1 text-red-600 hover:bg-red-100 rounded"
-                          title="Delete"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-2">
-                      <span className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">
-                        {getAgentTypeLabel(agent.agent_type)}
-                      </span>
-                      <span className="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded ml-2">
-                        {agent.voice_name}
-                      </span>
-                      <span className="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded ml-2">
-                        {agent.language_code}
-                      </span>
-                    </div>
-                    
-                    {agent.description && (
-                      <p className="text-gray-600 mt-2 text-sm">{agent.description}</p>
-                    )}
-                    
-                    <div className="mt-4 text-sm">
-                      <div className="flex items-center text-gray-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
-                        </svg>
-                        <span>
-                          {agent.business_hours_start || '9:00'} - {agent.business_hours_end || '17:00'}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center text-gray-600 mt-1">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
-                        </svg>
-                        <span>
-                          {(agent.business_days || [1, 2, 3, 4, 5])
-                            .map(day => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day])
-                            .join(', ')}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center text-gray-600 mt-1">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 2a8 8 0 100 16 8 8 0 000-16zm0 14a6 6 0 110-12 6 6 0 010 12z" clipRule="evenodd" />
-                        </svg>
-                        <span>Max calls: {agent.max_concurrent_calls || 5}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
+              </div>
             </div>
           )}
         </>
