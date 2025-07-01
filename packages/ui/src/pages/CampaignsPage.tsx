@@ -11,7 +11,7 @@ import {
   MegaphoneIcon
 } from '@heroicons/react/24/outline';
 import { useUser, usePermissions } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
+import { ApiService } from '../services/api';
 import { RealtimeService } from '../services/realtime';
 import type { Campaign, CampaignLead, AIAgent } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -38,7 +38,7 @@ export default function CampaignsPage() {
 
     try {
       setLoading(true);
-      const campaignsData = await DatabaseService.getCampaigns(user.id);
+      const campaignsData = await ApiService.getCampaigns(user.id);
       setCampaigns(campaignsData);
     } catch (error) {
       console.error('Error loading campaigns:', error);
@@ -75,7 +75,7 @@ export default function CampaignsPage() {
 
   const handleStatusChange = async (campaignId: string, newStatus: Campaign['status']) => {
     try {
-      await DatabaseService.updateCampaign(campaignId, { status: newStatus });
+      await ApiService.updateCampaign(campaignId, { status: newStatus });
       toast.success(`Campaign ${newStatus}`);
     } catch (error) {
       console.error('Error updating campaign status:', error);
@@ -89,7 +89,7 @@ export default function CampaignsPage() {
     }
 
     try {
-      await DatabaseService.deleteCampaign(campaignId);
+      await ApiService.deleteCampaign(campaignId);
       toast.success('Campaign deleted successfully');
     } catch (error) {
       console.error('Error deleting campaign:', error);
@@ -100,7 +100,7 @@ export default function CampaignsPage() {
   const handleViewLeads = async (campaign: Campaign) => {
     try {
       setSelectedCampaign(campaign);
-      const leads = await DatabaseService.getCampaignLeads(campaign.id);
+      const leads = await ApiService.getCampaignLeads(campaign.id);
       setCampaignLeads(leads);
       setShowLeadsModal(true);
     } catch (error) {
@@ -372,7 +372,7 @@ function CreateCampaignModal({ onClose, onSuccess }: { onClose: () => void; onSu
   const loadAgents = async () => {
     if (!user) return;
     try {
-      const agentsData = await DatabaseService.getAIAgents(user.id);
+      const agentsData = await ApiService.getAgents(user.id);
       setAgents(agentsData.filter(agent => agent.is_active));
       
       // Auto-select first agent if only one available
@@ -387,7 +387,7 @@ function CreateCampaignModal({ onClose, onSuccess }: { onClose: () => void; onSu
   const loadDefaultSettings = async () => {
     if (!user) return;
     try {
-      const settings = await DatabaseService.getUserSettings(user.id);
+      const settings = await ApiService.getUserSettings(user.id);
       if (settings?.twilio_phone_number) {
         setFormData(prev => ({ ...prev, caller_id: settings.twilio_phone_number }));
       }
@@ -523,9 +523,8 @@ function CreateCampaignModal({ onClose, onSuccess }: { onClose: () => void; onSu
     setLoading(true);
     try {
       // Create campaign
-      const campaign = await DatabaseService.createCampaign({
+      const campaign = await ApiService.createCampaign(user.id, {
         ...formData,
-        profile_id: user.id,
         status: 'draft',
         priority: 'normal' as const,
         custom_voice_name: formData.custom_voice_name as Campaign['custom_voice_name'],
@@ -541,20 +540,19 @@ function CreateCampaignModal({ onClose, onSuccess }: { onClose: () => void; onSu
 
       // Add leads to campaign
       if (campaign && leads.length > 0) {
-        for (const lead of leads) {
-          await DatabaseService.createCampaignLead({
-            campaign_id: campaign.id,
-            phone_number: lead.phone_number,
-            first_name: lead.first_name,
-            last_name: lead.last_name,
-            email: lead.email,
-            company: lead.company,
-            status: 'pending',
-            priority: 'normal',
-            call_attempts: 0,
-            do_not_call: false
-          });
-        }
+        const campaignLeads = leads.map(lead => ({
+          phone_number: lead.phone_number,
+          first_name: lead.first_name,
+          last_name: lead.last_name,
+          email: lead.email,
+          company: lead.company,
+          status: 'pending' as const,
+          priority: 'normal' as const,
+          call_attempts: 0,
+          do_not_call: false
+        }));
+        
+        await ApiService.uploadCampaignLeads(campaign.id, campaignLeads);
       }
       
       toast.success(`Campaign created successfully with ${leads.length} leads`);

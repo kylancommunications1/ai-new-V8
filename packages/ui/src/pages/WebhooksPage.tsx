@@ -14,7 +14,7 @@ import {
   CogIcon
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
+import { ApiService } from '../services/api';
 import { RealtimeService } from '../services/realtime';
 import type { WebhookEndpoint, WebhookDelivery } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -84,7 +84,7 @@ export default function WebhooksPage() {
 
     try {
       setLoading(true);
-      const webhooksData = await DatabaseService.getWebhookEndpoints(user.id);
+      const webhooksData = await ApiService.getWebhookEndpoints(user.id);
       setWebhooks(webhooksData);
     } catch (error) {
       console.error('Error loading webhooks:', error);
@@ -98,7 +98,7 @@ export default function WebhooksPage() {
     if (!user) return;
 
     try {
-      const deliveriesData = await DatabaseService.getWebhookDeliveries(user.id);
+      const deliveriesData = await ApiService.getWebhookDeliveries(user.id);
       setDeliveries(deliveriesData);
     } catch (error) {
       console.error('Error loading webhook deliveries:', error);
@@ -132,7 +132,7 @@ export default function WebhooksPage() {
 
   const handleToggleWebhook = async (webhookId: string, isActive: boolean) => {
     try {
-      await DatabaseService.updateWebhookEndpoint(webhookId, { is_active: !isActive });
+      await ApiService.updateWebhookEndpoint(webhookId, { is_active: !isActive });
       toast.success(`Webhook ${!isActive ? 'enabled' : 'disabled'}`);
     } catch (error) {
       console.error('Error toggling webhook:', error);
@@ -146,7 +146,7 @@ export default function WebhooksPage() {
     }
 
     try {
-      await DatabaseService.deleteWebhookEndpoint(webhookId);
+      await ApiService.deleteWebhookEndpoint(webhookId);
       toast.success('Webhook deleted successfully');
     } catch (error) {
       console.error('Error deleting webhook:', error);
@@ -156,7 +156,7 @@ export default function WebhooksPage() {
 
   const handleTestWebhook = async (webhookId: string) => {
     try {
-      await DatabaseService.testWebhookEndpoint(webhookId);
+      await ApiService.testWebhookEndpoint(webhookId);
       toast.success('Test webhook sent successfully');
     } catch (error) {
       console.error('Error testing webhook:', error);
@@ -597,7 +597,7 @@ function CreateWebhookModal({ onClose, onSuccess }: { onClose: () => void; onSuc
 
     setLoading(true);
     try {
-      await DatabaseService.createWebhookEndpoint({
+      await ApiService.createWebhookEndpoint({
         ...formData,
         profile_id: user.id,
         is_active: true
@@ -750,7 +750,7 @@ function EditWebhookModal({
 
     setLoading(true);
     try {
-      await DatabaseService.updateWebhookEndpoint(webhook.id, formData);
+      await ApiService.updateWebhookEndpoint(webhook.id, formData);
       
       toast.success('Webhook updated successfully');
       onSuccess();

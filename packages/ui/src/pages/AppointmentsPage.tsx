@@ -9,7 +9,7 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
+import { ApiService } from '../services/api';
 import { RealtimeService } from '../services/realtime';
 import { WebhookService } from '../services/webhook';
 import type { Appointment } from '../lib/supabase';
@@ -56,7 +56,7 @@ export default function AppointmentsPage() {
 
     try {
       setLoading(true);
-      const appointmentsData = await DatabaseService.getAppointments(user.id);
+      const appointmentsData = await ApiService.getAppointments(user.id);
       setAppointments(appointmentsData);
     } catch (error) {
       console.error('Error loading appointments:', error);
@@ -95,7 +95,7 @@ export default function AppointmentsPage() {
     if (!user) return;
     
     try {
-      const updatedAppointment = await DatabaseService.updateAppointment(appointmentId, { status: newStatus });
+      const updatedAppointment = await ApiService.updateAppointment(appointmentId, { status: newStatus });
       
       // Send appropriate webhook based on status
       if (newStatus === 'cancelled') {
@@ -119,7 +119,7 @@ export default function AppointmentsPage() {
     }
 
     try {
-      await DatabaseService.deleteAppointment(appointmentId);
+      await ApiService.deleteAppointment(appointmentId);
       toast.success('Appointment deleted successfully');
     } catch (error) {
       console.error('Error deleting appointment:', error);
@@ -401,7 +401,7 @@ function CreateAppointmentModal({ onClose, onSuccess }: { onClose: () => void; o
         status: 'scheduled'
       };
       
-      const newAppointment = await DatabaseService.createAppointment(appointmentData);
+      const newAppointment = await ApiService.createAppointment(user.id, appointmentData);
       
       // Send webhook notifications to integrated systems
       await WebhookService.appointmentCreated(newAppointment, user.id);
@@ -572,7 +572,7 @@ function EditAppointmentModal({
 
     setLoading(true);
     try {
-      const updatedAppointment = await DatabaseService.updateAppointment(appointment.id, {
+      const updatedAppointment = await ApiService.updateAppointment(appointment.id, {
         ...formData,
         appointment_date: new Date(formData.appointment_date).toISOString()
       });
