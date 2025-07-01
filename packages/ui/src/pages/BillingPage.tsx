@@ -7,8 +7,7 @@ import {
   ArrowUpIcon
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
-import type { Subscription, UsageRecord } from '../lib/supabase';
+import { ApiService, type BillingData } from '../services/api';
 import toast from 'react-hot-toast';
 
 const PLANS = [
