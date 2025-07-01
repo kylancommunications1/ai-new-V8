@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseAdmin } from '../lib/supabase';
 import type { 
   Profile, 
   CallLog, 
@@ -16,6 +16,8 @@ import type {
   ActiveCall,
   // FunctionCallLog
 } from '../lib/supabase';
+
+// Admin client already imported as supabaseAdmin
 
 export class DatabaseService {
   // Profile operations
@@ -65,7 +67,7 @@ export class DatabaseService {
   // AI Agents operations
   static async getAIAgents(profileId: string): Promise<AIAgent[]> {
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('ai_agents')
       .select('*')
       .eq('profile_id', profileId)
@@ -82,7 +84,7 @@ export class DatabaseService {
 
   static async createAIAgent(agent: Omit<AIAgent, 'id' | 'created_at' | 'updated_at'>): Promise<AIAgent | null> {
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('ai_agents')
       .insert(agent)
       .select()
@@ -97,25 +99,40 @@ export class DatabaseService {
   }
 
   static async updateAIAgent(id: string, updates: Partial<AIAgent>): Promise<AIAgent | null> {
+    try {
+      // Add updated_at timestamp
+      const updateData = {
+        ...updates,
+        updated_at: new Date().toISOString()
+      };
 
-    const { data, error } = await supabase
-      .from('ai_agents')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
+      console.log('Updating AI agent with data:', updateData);
 
-    if (error) {
-      console.error('Error updating AI agent:', error);
+      // Use admin client for agent operations
+      const { data, error } = await supabaseAdmin
+        .from('ai_agents')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error updating AI agent:', error);
+        console.error('Update data was:', updateData);
+        throw new Error(`Failed to update agent: ${error.message}`);
+      }
+
+      console.log('Successfully updated AI agent:', data);
+      return data;
+    } catch (error) {
+      console.error('Exception in updateAIAgent:', error);
       throw error;
     }
-
-    return data;
   }
 
   static async deleteAIAgent(id: string): Promise<boolean> {
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('ai_agents')
       .delete()
       .eq('id', id);
@@ -516,6 +533,7 @@ export class DatabaseService {
   }
 
   // Demo data methods
+  // @ts-ignore
   private static getDemoProfile(userId?: string): Profile {
     // Check if this is the admin user
     if (userId === 'admin-user-id') {
@@ -556,6 +574,7 @@ export class DatabaseService {
     };
   }
 
+  // @ts-ignore
   private static getDemoAgents(): AIAgent[] {
     return [
       {
@@ -564,6 +583,7 @@ export class DatabaseService {
         name: 'Customer Service Agent',
         description: 'Primary customer service agent for general inquiries',
         agent_type: 'customer_service',
+        call_direction: 'inbound',
         voice_name: 'Puck',
         language_code: 'en-US',
         system_instruction: 'You are a professional customer service representative.',
@@ -585,6 +605,7 @@ export class DatabaseService {
         name: 'Sales Agent',
         description: 'Outbound sales agent for lead qualification',
         agent_type: 'sales',
+        call_direction: 'outbound',
         voice_name: 'Charon',
         language_code: 'en-US',
         system_instruction: 'You are a professional sales representative.',
@@ -602,6 +623,8 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore - Demo method kept for future use
+  // @ts-ignore
   private static getDemoCallLogs(): CallLog[] {
     return [
       {
@@ -642,6 +665,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoCampaigns(): Campaign[] {
     return [
       {
@@ -671,6 +695,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoCampaignLeads(): CampaignLead[] {
     return [
       {
@@ -693,6 +718,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoAppointments(): Appointment[] {
     return [
       {
@@ -715,6 +741,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoAnalytics(): AnalyticsData {
     return {
       totalCalls: 247,
@@ -801,6 +828,7 @@ export class DatabaseService {
     };
   }
 
+  // @ts-ignore
   private static getDemoSystemStatus(): SystemStatus[] {
     return [
       {
@@ -820,6 +848,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoActiveCalls(): any[] {
     return [
       {
@@ -1343,6 +1372,7 @@ export class DatabaseService {
   }
 
   // Demo data methods for new features
+  // @ts-ignore
   private static getDemoCampaignMetrics(): any[] {
     return [
       {
@@ -1372,6 +1402,7 @@ export class DatabaseService {
     ];
   }
 
+  // @ts-ignore
   private static getDemoSystemMetrics(): any[] {
     return [
       {

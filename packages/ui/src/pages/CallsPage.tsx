@@ -8,28 +8,34 @@ import {
   DocumentTextIcon,
   FunnelIcon,
   ArrowDownTrayIcon,
-  MagnifyingGlassIcon
+  MagnifyingGlassIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  XMarkIcon,
+  SpeakerWaveIcon
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
-import { DatabaseService } from '../services/database';
+import { ApiService, type CallHistoryFilters, type PaginatedCallHistory } from '../services/api';
 import { RealtimeService } from '../services/realtime';
-import { ExportService } from '../services/export';
 import type { CallLog } from '../lib/supabase';
 import toast from 'react-hot-toast';
 
 export default function CallsPage() {
   const { user } = useUser();
-  const [calls, setCalls] = useState<CallLog[]>([]);
+  const [callHistory, setCallHistory] = useState<PaginatedCallHistory | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'inbound' | 'outbound'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'failed' | 'in_progress' | 'abandoned'>('all');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [filters, setFilters] = useState<CallHistoryFilters>({
+    direction: 'all',
+    status: 'all',
+    searchTerm: ''
+  });
   const [selectedCall, setSelectedCall] = useState<CallLog | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [showRecordingPlayer, setShowRecordingPlayer] = useState(false);
   const [currentRecording, setCurrentRecording] = useState<CallLog | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalCalls, setTotalCalls] = useState(0);
+  const [transcript, setTranscript] = useState<string>('');
+  const [recordingUrl, setRecordingUrl] = useState<string>('');
   const callsPerPage = 20;
 
   useEffect(() => {
@@ -37,19 +43,15 @@ export default function CallsPage() {
       loadCalls();
       setupRealtimeSubscriptions();
     }
-  }, [user, currentPage, filter, statusFilter]);
+  }, [user, currentPage, filters]);
 
   const loadCalls = async () => {
     if (!user) return;
 
     try {
       setLoading(true);
-      const offset = (currentPage - 1) * callsPerPage;
-      const callsData = await DatabaseService.getCallLogs(user.id, callsPerPage, offset);
-      setCalls(callsData);
-      
-      // In a real implementation, you'd get the total count from the API
-      setTotalCalls(callsData.length);
+      const history = await ApiService.getCallHistory(user.id, currentPage, callsPerPage, filters);
+      setCallHistory(history);
     } catch (error) {
       console.error('Error loading calls:', error);
       toast.error('Failed to load call history');
@@ -64,15 +66,30 @@ export default function CallsPage() {
     const subscription = RealtimeService.subscribeToCallUpdates(
       user.id,
       (updatedCall) => {
-        setCalls(prev => 
-          prev.map(call => call.id === updatedCall.id ? updatedCall : call)
-        );
+        setCallHistory(prev => {
+          if (!prev) return prev;
+          
+          const updatedCalls = prev.calls.map(call => 
+            call.id === updatedCall.id ? updatedCall : call
+          );
+          
+          return { ...prev, calls: updatedCalls };
+        });
       },
       (newCall) => {
-        setCalls(prev => [newCall, ...prev.slice(0, callsPerPage - 1)]);
+        // Refresh the current page to show new calls
+        if (currentPage === 1) {
+          loadCalls();
+        }
       },
       (callId) => {
-        setCalls(prev => prev.filter(call => call.id !== callId));
+        setCallHistory(prev => {
+          if (!prev) return prev;
+          
+          const filteredCalls = prev.calls.filter(call => call.id !== callId);
+          
+          return { ...prev, calls: filteredCalls, total: prev.total - 1 };
+        });
       }
     );
 
@@ -85,9 +102,16 @@ export default function CallsPage() {
 
   const handleExportCalls = async () => {
     try {
-      // Get all calls for export (not just current page)
-      const allCalls = await DatabaseService.getAllCallLogs(user!.id);
-      ExportService.exportCallsToCSV(allCalls);
+      const blob = await ApiService.exportCallHistory(user!.id, filters);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `call-history-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
       toast.success('Call history exported successfully');
     } catch (error) {
       console.error('Error exporting calls:', error);
@@ -136,27 +160,50 @@ export default function CallsPage() {
     }
   };
 
-  const handleViewTranscript = (call: CallLog) => {
-    setSelectedCall(call);
-    setShowTranscript(true);
+  const handleViewTranscript = async (call: CallLog) => {
+    try {
+      const callTranscript = await ApiService.getCallTranscript(call.id);
+      if (callTranscript) {
+        setTranscript(callTranscript);
+        setSelectedCall(call);
+        setShowTranscript(true);
+      } else {
+        toast.error('No transcript available for this call');
+      }
+    } catch (error) {
+      console.error('Error loading transcript:', error);
+      toast.error('Failed to load transcript');
+    }
   };
 
-  const handlePlayRecording = (call: CallLog) => {
-    setCurrentRecording(call);
-    setShowRecordingPlayer(true);
+  const handlePlayRecording = async (call: CallLog) => {
+    try {
+      const recording = await ApiService.getCallRecording(call.id);
+      if (recording) {
+        setRecordingUrl(recording);
+        setCurrentRecording(call);
+        setShowRecordingPlayer(true);
+      } else {
+        toast.error('No recording available for this call');
+      }
+    } catch (error) {
+      console.error('Error loading recording:', error);
+      toast.error('Failed to load recording');
+    }
   };
 
   const handleDownloadRecording = async (call: CallLog) => {
-    if (!call.recording_url) {
-      toast.error('No recording available for this call');
-      return;
-    }
-
     try {
+      const recording = await ApiService.getCallRecording(call.id);
+      if (!recording) {
+        toast.error('No recording available for this call');
+        return;
+      }
+
       // Create a temporary link to download the recording
       const link = document.createElement('a');
-      link.href = call.recording_url;
-      link.download = `call-recording-${call.id}-${new Date(call.created_at).toISOString().split('T')[0]}.mp3`;
+      link.href = recording;
+      link.download = `call-recording-${call.id}-${new Date(call.started_at).toISOString().split('T')[0]}.mp3`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -168,19 +215,25 @@ export default function CallsPage() {
     }
   };
 
+  const handleFilterChange = (key: keyof CallHistoryFilters, value: any) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+    setCurrentPage(1); // Reset to first page when filters change
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      direction: 'all',
+      status: 'all',
+      searchTerm: ''
+    });
+    setCurrentPage(1);
+  };
 
 
-  const filteredCalls = calls.filter(call => {
-    const matchesDirection = filter === 'all' || call.direction === filter;
-    const matchesStatus = statusFilter === 'all' || call.status === statusFilter;
-    const matchesSearch = searchTerm === '' || 
-      call.phone_number_from.includes(searchTerm) ||
-      call.phone_number_to.includes(searchTerm) ||
-      call.call_summary?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      call.outcome?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    return matchesDirection && matchesStatus && matchesSearch;
-  });
 
   if (loading) {
     return (
@@ -190,16 +243,38 @@ export default function CallsPage() {
     );
   }
 
+  if (!callHistory) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
+          <h3 className="mt-2 text-sm font-medium text-gray-900">No call history available</h3>
+          <p className="mt-1 text-sm text-gray-500">Unable to load call history data.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const totalPages = Math.ceil(callHistory.total / callsPerPage);
+
   return (
     <div className="space-y-6">
       <div className="sm:flex sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Call History</h1>
           <p className="mt-2 text-sm text-gray-700">
-            View and manage all your AI call center interactions.
+            View and manage all your AI call center interactions. 
+            <span className="font-medium text-gray-900"> {callHistory.total} total calls</span>
           </p>
         </div>
         <div className="mt-4 sm:mt-0 flex space-x-3">
+          <button
+            onClick={clearFilters}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+          >
+            <XMarkIcon className="h-4 w-4 mr-2" />
+            Clear Filters
+          </button>
           <button
             onClick={handleExportCalls}
             className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
@@ -219,9 +294,9 @@ export default function CallsPage() {
               <MagnifyingGlassIcon className="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search calls..."
+                value={filters.searchTerm}
+                onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
+                placeholder="Search phone numbers, summaries..."
                 className="pl-10 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -229,8 +304,8 @@ export default function CallsPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Direction</label>
             <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value as 'all' | 'inbound' | 'outbound')}
+              value={filters.direction}
+              onChange={(e) => handleFilterChange('direction', e.target.value)}
               className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">All Directions</option>
@@ -241,8 +316,8 @@ export default function CallsPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
             <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
+              value={filters.status}
+              onChange={(e) => handleFilterChange('status', e.target.value)}
               className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">All Statuses</option>
@@ -252,18 +327,20 @@ export default function CallsPage() {
               <option value="abandoned">Abandoned</option>
             </select>
           </div>
-          <div className="flex items-end">
-            <button
-              onClick={() => {
-                setFilter('all');
-                setStatusFilter('all');
-                setSearchTerm('');
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+            <select
+              value={filters.dateRange || 'all'}
+              onChange={(e) => handleFilterChange('dateRange', e.target.value === 'all' ? undefined : e.target.value)}
+              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
             >
-              <FunnelIcon className="h-4 w-4 inline mr-2" />
-              Clear Filters
-            </button>
+              <option value="all">All Time</option>
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+            </select>
           </div>
         </div>
       </div>
@@ -298,7 +375,7 @@ export default function CallsPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredCalls.map((call) => (
+              {callHistory.calls.map((call) => (
                 <tr key={call.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
@@ -384,12 +461,12 @@ export default function CallsPage() {
         </div>
       </div>
 
-      {filteredCalls.length === 0 && (
+      {callHistory.calls.length === 0 && (
         <div className="text-center py-12">
           <PhoneIcon className="mx-auto h-12 w-12 text-gray-400" />
           <h3 className="mt-2 text-sm font-medium text-gray-900">No calls found</h3>
           <p className="mt-1 text-sm text-gray-500">
-            {searchTerm || filter !== 'all' || statusFilter !== 'all'
+            {filters.searchTerm || filters.direction !== 'all' || filters.status !== 'all'
               ? 'No calls match your current filters.'
               : 'No calls have been made yet.'
             }
@@ -398,22 +475,24 @@ export default function CallsPage() {
       )}
 
       {/* Pagination */}
-      {totalCalls > callsPerPage && (
-        <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      {callHistory.total > callsPerPage && (
+        <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 rounded-lg">
           <div className="flex flex-1 justify-between sm:hidden">
             <button
-              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+              onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
               disabled={currentPage === 1}
               className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
+              <ChevronLeftIcon className="h-4 w-4 mr-1" />
               Previous
             </button>
             <button
-              onClick={() => setCurrentPage(currentPage + 1)}
-              disabled={currentPage * callsPerPage >= totalCalls}
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage >= totalPages}
               className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Next
+              <ChevronRightIcon className="h-4 w-4 ml-1" />
             </button>
           </div>
           <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
@@ -423,28 +502,49 @@ export default function CallsPage() {
                 <span className="font-medium">{(currentPage - 1) * callsPerPage + 1}</span>
                 {' '}to{' '}
                 <span className="font-medium">
-                  {Math.min(currentPage * callsPerPage, totalCalls)}
+                  {Math.min(currentPage * callsPerPage, callHistory.total)}
                 </span>
                 {' '}of{' '}
-                <span className="font-medium">{totalCalls}</span>
+                <span className="font-medium">{callHistory.total}</span>
                 {' '}results
               </p>
             </div>
             <div>
               <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
                 <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                  onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
                   className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
                 >
-                  Previous
+                  <ChevronLeftIcon className="h-4 w-4" />
+                  <span className="sr-only">Previous</span>
                 </button>
+                
+                {/* Page numbers */}
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => handlePageChange(pageNum)}
+                      className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ${
+                        pageNum === currentPage
+                          ? 'z-10 bg-blue-600 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600'
+                          : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+                
                 <button
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage * callsPerPage >= totalCalls}
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
                   className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
                 >
-                  Next
+                  <span className="sr-only">Next</span>
+                  <ChevronRightIcon className="h-4 w-4" />
                 </button>
               </nav>
             </div>
@@ -490,7 +590,7 @@ export default function CallsPage() {
                 <div className="prose max-w-none">
                   <h4 className="text-sm font-medium text-gray-900 mb-2">Transcript:</h4>
                   <div className="text-sm text-gray-700 whitespace-pre-wrap bg-white p-4 border rounded-lg">
-                    {selectedCall.transcript || 'No transcript available for this call.'}
+                    {transcript || 'No transcript available for this call.'}
                   </div>
                   
                   {selectedCall.call_summary && (
@@ -554,16 +654,16 @@ export default function CallsPage() {
               <div className="space-y-4">
                 <div className="bg-white p-4 border rounded-lg">
                   <h4 className="text-sm font-medium text-gray-900 mb-3">Audio Player:</h4>
-                  {currentRecording.recording_url ? (
+                  {recordingUrl ? (
                     <div className="space-y-3">
                       <audio 
                         controls 
                         className="w-full"
                         preload="metadata"
                       >
-                        <source src={currentRecording.recording_url} type="audio/mpeg" />
-                        <source src={currentRecording.recording_url} type="audio/wav" />
-                        <source src={currentRecording.recording_url} type="audio/mp3" />
+                        <source src={recordingUrl} type="audio/mpeg" />
+                        <source src={recordingUrl} type="audio/wav" />
+                        <source src={recordingUrl} type="audio/mp3" />
                         Your browser does not support the audio element.
                       </audio>
                       
@@ -577,7 +677,7 @@ export default function CallsPage() {
                         </button>
                         
                         <a
-                          href={currentRecording.recording_url}
+                          href={recordingUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"

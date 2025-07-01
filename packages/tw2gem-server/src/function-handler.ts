@@ -215,13 +215,18 @@ export class FunctionCallHandler {
 
   // Get all registered functions for Gemini setup
   getFunctionDefinitions(): object[] {
-    return Array.from(this.functions.values()).map(func => ({
-      function_declarations: [{
+    const functions = Array.from(this.functions.values());
+    if (functions.length === 0) {
+      return [];
+    }
+    
+    return [{
+      function_declarations: functions.map(func => ({
         name: func.name,
         description: func.description,
         parameters: func.parameters
-      }]
-    }));
+      }))
+    }];
   }
 
   // Execute a function call
