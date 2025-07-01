@@ -19,8 +19,8 @@ import {
   ArrowPathIcon,
   ChartBarIcon,
   ClockIcon,
-  ArrowArrowTrendingUpIcon,
-  ArrowArrowTrendingDownIcon
+  ArrowTrendingUpIcon,
+  ArrowTrendingDownIcon
 } from '@heroicons/react/24/outline';
 import { useUser } from '../contexts/UserContext';
 import { ApiService, type AnalyticsMetrics } from '../services/api';
